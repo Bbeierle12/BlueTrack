@@ -1,0 +1,15 @@
+[package]
+name = "bluetooth-mapper"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bluer = { version = "0.17.4", features = ["bluetoothd", "serde"] }
+chrono = { version = "0.4.44", features = ["serde"] }
+dirs = "6.0.0"
+eframe = "0.33.3"
+futures = "0.3.31"
+rusqlite = { version = "0.38.0", features = ["bundled"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread", "sync", "time"] }
