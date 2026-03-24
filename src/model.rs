@@ -563,7 +563,10 @@ mod tests {
             d.note_advertisement(fixed_time(), Some(-60));
         }
         let sd = d.rssi_std_dev().unwrap();
-        assert!(sd.abs() < 0.001, "identical samples should have ~0 std dev, got {sd}");
+        assert!(
+            sd.abs() < 0.001,
+            "identical samples should have ~0 std dev, got {sd}"
+        );
     }
 
     #[test]
@@ -851,28 +854,40 @@ mod tests {
     fn format_relative_time_seconds() {
         let time = Utc::now() - chrono::Duration::seconds(30);
         let result = format_relative_time(time);
-        assert!(result.ends_with("s ago"), "expected seconds format, got {result}");
+        assert!(
+            result.ends_with("s ago"),
+            "expected seconds format, got {result}"
+        );
     }
 
     #[test]
     fn format_relative_time_minutes() {
         let time = Utc::now() - chrono::Duration::minutes(5);
         let result = format_relative_time(time);
-        assert!(result.ends_with("m ago"), "expected minutes format, got {result}");
+        assert!(
+            result.ends_with("m ago"),
+            "expected minutes format, got {result}"
+        );
     }
 
     #[test]
     fn format_relative_time_hours() {
         let time = Utc::now() - chrono::Duration::hours(3);
         let result = format_relative_time(time);
-        assert!(result.ends_with("h ago"), "expected hours format, got {result}");
+        assert!(
+            result.ends_with("h ago"),
+            "expected hours format, got {result}"
+        );
     }
 
     #[test]
     fn format_relative_time_days() {
         let time = Utc::now() - chrono::Duration::days(5);
         let result = format_relative_time(time);
-        assert!(result.ends_with("d ago"), "expected days format, got {result}");
+        assert!(
+            result.ends_with("d ago"),
+            "expected days format, got {result}"
+        );
     }
 
     // ── bytes_to_hex ────────────────────────────────────────────────
@@ -914,21 +929,30 @@ mod tests {
     fn format_relative_time_at_5_second_boundary() {
         let time = Utc::now() - chrono::Duration::seconds(5);
         let result = format_relative_time(time);
-        assert!(result.ends_with("s ago"), "expected seconds at boundary, got: {result}");
+        assert!(
+            result.ends_with("s ago"),
+            "expected seconds at boundary, got: {result}"
+        );
     }
 
     #[test]
     fn format_relative_time_at_60_second_boundary() {
         let time = Utc::now() - chrono::Duration::seconds(60);
         let result = format_relative_time(time);
-        assert!(result.ends_with("m ago"), "expected minutes at boundary, got: {result}");
+        assert!(
+            result.ends_with("m ago"),
+            "expected minutes at boundary, got: {result}"
+        );
     }
 
     #[test]
     fn format_relative_time_at_48_hour_boundary() {
         let time = Utc::now() - chrono::Duration::hours(48);
         let result = format_relative_time(time);
-        assert!(result.ends_with("d ago"), "expected days at 48h boundary, got: {result}");
+        assert!(
+            result.ends_with("d ago"),
+            "expected days at 48h boundary, got: {result}"
+        );
     }
 
     // ── bytes_to_hex additional cases ───────────────────────────────

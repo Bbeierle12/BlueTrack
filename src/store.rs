@@ -128,7 +128,7 @@ impl Store {
         self.conn
             .execute(
                 "DELETE FROM sightings WHERE seen_at < datetime('now', ?1)",
-                params![format!("-{} day", retention_days)],
+                params![format!("-{} days", retention_days)],
             )
             .map_err(|error| error.to_string())?;
         Ok(())
@@ -251,10 +251,12 @@ mod tests {
         device.alias = Some("My Device".into());
         device.rssi = Some(-65);
         device.paired = true;
-        device.manufacturer_data.push(crate::model::ManufacturerEntry {
-            id: 0x004c,
-            payload_hex: "0215abcd".into(),
-        });
+        device
+            .manufacturer_data
+            .push(crate::model::ManufacturerEntry {
+                id: 0x004c,
+                payload_hex: "0215abcd".into(),
+            });
         device.uuids = vec!["0000180a-0000-1000-8000-00805f9b34fb".into()];
 
         store.upsert_device(&device).unwrap();

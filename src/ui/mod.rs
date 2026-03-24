@@ -77,9 +77,12 @@ pub fn render(
             ui.selectable_value(selected_tab, ViewTab::Map, "Proximity Radar");
             ui.add_space(16.0);
             ui.label(
-                RichText::new(format!("Runtime: {}", format_relative_time(snapshot.metrics.started_at)))
-                    .small()
-                    .color(egui::Color32::from_rgb(140, 150, 160)),
+                RichText::new(format!(
+                    "Runtime: {}",
+                    format_relative_time(snapshot.metrics.started_at)
+                ))
+                .small()
+                .color(egui::Color32::from_rgb(140, 150, 160)),
             );
         });
 
@@ -88,27 +91,37 @@ pub fn render(
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 filter_tab(
-                    ui, scan_filter, ScanFilter::Live,
+                    ui,
+                    scan_filter,
+                    ScanFilter::Live,
                     &format!("Live {}", snapshot.metrics.live_devices),
                     COLOR_NEAR,
                 );
                 filter_tab(
-                    ui, scan_filter, ScanFilter::Stale,
+                    ui,
+                    scan_filter,
+                    ScanFilter::Stale,
                     &format!("Stale {}", snapshot.metrics.stale_devices),
                     COLOR_STALE,
                 );
                 filter_tab(
-                    ui, scan_filter, ScanFilter::Public,
+                    ui,
+                    scan_filter,
+                    ScanFilter::Public,
                     &format!("Public {}", snapshot.metrics.public_devices),
                     COLOR_MID,
                 );
                 filter_tab(
-                    ui, scan_filter, ScanFilter::Random,
+                    ui,
+                    scan_filter,
+                    ScanFilter::Random,
                     &format!("Random {}", snapshot.metrics.random_devices),
                     COLOR_FAR,
                 );
                 filter_tab(
-                    ui, scan_filter, ScanFilter::Errors,
+                    ui,
+                    scan_filter,
+                    ScanFilter::Errors,
                     &format!("Errors {}", snapshot.metrics.bluez_errors),
                     COLOR_ERROR,
                 );
@@ -122,11 +135,9 @@ pub fn render(
             render_device_detail(ui, snapshot, selected_device)
         });
 
-    egui::CentralPanel::default().show(ctx, |ui| {
-        match selected_tab {
-            ViewTab::Scan => render_scan_view(ui, snapshot, scan_filter, selected_device),
-            ViewTab::Map => render_map_view(ui, snapshot, selected_device),
-        }
+    egui::CentralPanel::default().show(ctx, |ui| match selected_tab {
+        ViewTab::Scan => render_scan_view(ui, snapshot, scan_filter, selected_device),
+        ViewTab::Map => render_map_view(ui, snapshot, selected_device),
     });
 
     action
@@ -410,10 +421,7 @@ fn render_map_view(
                 };
 
             let r = radius * distance_fraction;
-            let dot_pos = egui::pos2(
-                center.x + r * angle.cos(),
-                center.y + r * angle.sin(),
-            );
+            let dot_pos = egui::pos2(center.x + r * angle.cos(), center.y + r * angle.sin());
 
             let tint = band_color(device);
             let is_selected = selected_device.as_deref() == Some(device.address.as_str());
@@ -425,7 +433,11 @@ fn render_map_view(
             } else {
                 3.0 + (device.stability_score() as f32 / 100.0) * 5.0
             };
-            let dot_radius = if is_selected { base_dot + 3.0 } else { base_dot };
+            let dot_radius = if is_selected {
+                base_dot + 3.0
+            } else {
+                base_dot
+            };
             let alpha = if is_stale { 0.45 } else { 0.85 };
 
             // Filled dot
@@ -442,8 +454,7 @@ fn render_map_view(
 
             // Hover detection
             let hit_radius = dot_radius.max(8.0);
-            let is_hovered = pointer_pos
-                .is_some_and(|pos| pos.distance(dot_pos) <= hit_radius);
+            let is_hovered = pointer_pos.is_some_and(|pos| pos.distance(dot_pos) <= hit_radius);
 
             // Show label only for: selected, named (non-unknown), or hovered
             let has_name = device.display_name() != "Unknown device";
@@ -504,7 +515,10 @@ fn render_map_view(
                 device.recurrence_label(),
                 device.stability_score()
             ));
-            ui.label(format!("Last seen: {}", format_relative_time(device.last_seen)));
+            ui.label(format!(
+                "Last seen: {}",
+                format_relative_time(device.last_seen)
+            ));
             if let Some(battery) = device.battery_percentage {
                 ui.label(format!("Battery: {battery}%"));
             }
@@ -768,8 +782,7 @@ fn render_event_log(ui: &mut egui::Ui, snapshot: &AppSnapshot) {
     if snapshot.event_log.is_empty() {
         ui.add_space(24.0);
         ui.label(
-            RichText::new("No events recorded.")
-                .color(egui::Color32::from_rgb(140, 150, 160)),
+            RichText::new("No events recorded.").color(egui::Color32::from_rgb(140, 150, 160)),
         );
         return;
     }

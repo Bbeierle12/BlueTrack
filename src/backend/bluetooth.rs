@@ -360,10 +360,7 @@ impl Worker {
                 {
                     // Persist a sighting row on genuine new appearances only.
                     let now = device.last_seen;
-                    if should_persist_sighting(
-                        self.sighting_throttle.get(&device.address),
-                        now,
-                    ) {
+                    if should_persist_sighting(self.sighting_throttle.get(&device.address), now) {
                         if let Some(store) = &self.store {
                             let _ = store.insert_sighting(&device, now);
                         }
@@ -506,12 +503,9 @@ impl Worker {
         // and would just bloat the sightings table.
         let should_upsert = is_public
             && (is_first
-                || self
-                    .upsert_throttle
-                    .get(&address_key)
-                    .is_none_or(|last| {
-                        now.signed_duration_since(*last) >= chrono::Duration::seconds(5)
-                    }));
+                || self.upsert_throttle.get(&address_key).is_none_or(|last| {
+                    now.signed_duration_since(*last) >= chrono::Duration::seconds(5)
+                }));
         if should_upsert {
             if let Some(store) = &self.store {
                 let _ = store.upsert_device(record);
@@ -556,7 +550,11 @@ impl Worker {
     fn emit_snapshot(&mut self) {
         let live_devices = self.devices.values().filter(|d| !d.stale).count();
         let stale_devices = self.devices.len().saturating_sub(live_devices);
-        let public_devices = self.devices.values().filter(|d| d.is_public_address()).count();
+        let public_devices = self
+            .devices
+            .values()
+            .filter(|d| d.is_public_address())
+            .count();
         let random_devices = self.devices.len().saturating_sub(public_devices);
         self.metrics.total_devices = self.devices.len();
         self.metrics.live_devices = live_devices;
@@ -703,7 +701,11 @@ mod tests {
         let purge_after = chrono::Duration::seconds(60);
 
         let mut devices = HashMap::new();
-        let mut d = DeviceRecord::new("AA:BB:CC:DD:EE:FF", "hci0", now - chrono::Duration::seconds(35));
+        let mut d = DeviceRecord::new(
+            "AA:BB:CC:DD:EE:FF",
+            "hci0",
+            now - chrono::Duration::seconds(35),
+        );
         d.address_type = Some("public".into());
         devices.insert(d.address.clone(), d);
 
@@ -719,7 +721,11 @@ mod tests {
         let purge_after = chrono::Duration::seconds(60);
 
         let mut devices = HashMap::new();
-        let d = DeviceRecord::new("AA:BB:CC:DD:EE:FF", "hci0", now - chrono::Duration::seconds(10));
+        let d = DeviceRecord::new(
+            "AA:BB:CC:DD:EE:FF",
+            "hci0",
+            now - chrono::Duration::seconds(10),
+        );
         devices.insert(d.address.clone(), d);
 
         apply_stale_policy(&mut devices, stale_after, purge_after, now);
@@ -734,13 +740,20 @@ mod tests {
         let purge_after = chrono::Duration::seconds(60);
 
         let mut devices = HashMap::new();
-        let mut d = DeviceRecord::new("AA:BB:CC:DD:EE:FF", "hci0", now - chrono::Duration::seconds(65));
+        let mut d = DeviceRecord::new(
+            "AA:BB:CC:DD:EE:FF",
+            "hci0",
+            now - chrono::Duration::seconds(65),
+        );
         d.address_type = Some("random".into());
         devices.insert(d.address.clone(), d);
 
         apply_stale_policy(&mut devices, stale_after, purge_after, now);
 
-        assert!(devices.is_empty(), "random device past purge_after should be removed");
+        assert!(
+            devices.is_empty(),
+            "random device past purge_after should be removed"
+        );
     }
 
     #[test]
@@ -750,7 +763,11 @@ mod tests {
         let purge_after = chrono::Duration::seconds(60);
 
         let mut devices = HashMap::new();
-        let mut d = DeviceRecord::new("AA:BB:CC:DD:EE:FF", "hci0", now - chrono::Duration::seconds(65));
+        let mut d = DeviceRecord::new(
+            "AA:BB:CC:DD:EE:FF",
+            "hci0",
+            now - chrono::Duration::seconds(65),
+        );
         d.address_type = Some("public".into());
         devices.insert(d.address.clone(), d);
 
@@ -769,16 +786,28 @@ mod tests {
         let mut devices = HashMap::new();
 
         // Recent device (no address_type) — kept, not stale
-        let d1 = DeviceRecord::new("AA:00:00:00:00:01", "hci0", now - chrono::Duration::seconds(10));
+        let d1 = DeviceRecord::new(
+            "AA:00:00:00:00:01",
+            "hci0",
+            now - chrono::Duration::seconds(10),
+        );
         devices.insert(d1.address.clone(), d1);
 
         // Old random device — purged
-        let mut d2 = DeviceRecord::new("AA:00:00:00:00:02", "hci0", now - chrono::Duration::seconds(65));
+        let mut d2 = DeviceRecord::new(
+            "AA:00:00:00:00:02",
+            "hci0",
+            now - chrono::Duration::seconds(65),
+        );
         d2.address_type = Some("random".into());
         devices.insert(d2.address.clone(), d2);
 
         // Old public device — kept but stale
-        let mut d3 = DeviceRecord::new("AA:00:00:00:00:03", "hci0", now - chrono::Duration::seconds(65));
+        let mut d3 = DeviceRecord::new(
+            "AA:00:00:00:00:03",
+            "hci0",
+            now - chrono::Duration::seconds(65),
+        );
         d3.address_type = Some("public".into());
         devices.insert(d3.address.clone(), d3);
 
@@ -799,7 +828,11 @@ mod tests {
         let purge_after = chrono::Duration::seconds(60);
 
         let mut devices = HashMap::new();
-        let d = DeviceRecord::new("AA:BB:CC:DD:EE:FF", "hci0", now - chrono::Duration::seconds(30));
+        let d = DeviceRecord::new(
+            "AA:BB:CC:DD:EE:FF",
+            "hci0",
+            now - chrono::Duration::seconds(30),
+        );
         devices.insert(d.address.clone(), d);
 
         apply_stale_policy(&mut devices, stale_after, purge_after, now);

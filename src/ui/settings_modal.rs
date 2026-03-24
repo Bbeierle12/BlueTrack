@@ -138,7 +138,6 @@ impl SettingsModal {
                         .suffix(" days"),
                 );
                 ui.end_row();
-
             });
 
         // Detect changes to re-validate only when needed

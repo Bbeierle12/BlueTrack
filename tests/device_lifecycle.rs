@@ -1,4 +1,4 @@
-use bluetooth_mapper::model::{bytes_to_hex, AppSnapshot, DeviceRecord};
+use bluetooth_mapper::model::{AppSnapshot, DeviceRecord, bytes_to_hex};
 use chrono::{TimeZone, Utc};
 
 #[test]

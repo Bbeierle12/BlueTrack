@@ -220,7 +220,10 @@ mod tests {
         let restored: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.stale_after_seconds, original.stale_after_seconds);
         assert_eq!(restored.min_rssi, original.min_rssi);
-        assert_eq!(restored.refresh_interval_seconds, original.refresh_interval_seconds);
+        assert_eq!(
+            restored.refresh_interval_seconds,
+            original.refresh_interval_seconds
+        );
         assert_eq!(restored.retention_days, original.retention_days);
         assert_eq!(restored.auto_start_scan, original.auto_start_scan);
     }
@@ -288,7 +291,11 @@ mod tests {
     fn database_path_ends_with_sqlite3() {
         let s = Settings::default();
         let p = s.database_path();
-        assert!(p.to_string_lossy().ends_with(".sqlite3"), "got: {}", p.display());
+        assert!(
+            p.to_string_lossy().ends_with(".sqlite3"),
+            "got: {}",
+            p.display()
+        );
     }
 
     // ── transport variants ──────────────────────────────────────────
