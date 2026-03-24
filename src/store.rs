@@ -50,6 +50,8 @@ impl Store {
                 );
                 CREATE INDEX IF NOT EXISTS idx_sightings_address_seen_at
                     ON sightings(address, seen_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_sightings_seen_at
+                    ON sightings(seen_at);
                 ",
             )
             .map_err(|error| error.to_string())
@@ -85,7 +87,7 @@ impl Store {
                     json = excluded.json,
                     updated_at = excluded.updated_at
                 ",
-                params![device.address, json, device.last_seen.to_rfc3339()],
+                params![device.address, json, format_sqlite_datetime(device.last_seen)],
             )
             .map_err(|error| error.to_string())?;
         Ok(())
@@ -114,7 +116,7 @@ impl Store {
                     device.address,
                     device.adapter_name,
                     device.name.clone().or_else(|| device.alias.clone()),
-                    seen_at.to_rfc3339(),
+                    format_sqlite_datetime(seen_at),
                     device.rssi,
                     device.manufacturer_summary(),
                     device.proximity_band(),
@@ -125,14 +127,21 @@ impl Store {
     }
 
     pub fn prune_old_sightings(&self, retention_days: u32) -> Result<(), String> {
+        let cutoff = Utc::now() - chrono::Duration::days(i64::from(retention_days));
         self.conn
             .execute(
-                "DELETE FROM sightings WHERE seen_at < datetime('now', ?1)",
-                params![format!("-{} day", retention_days)],
+                "DELETE FROM sightings WHERE seen_at < ?1",
+                params![format_sqlite_datetime(cutoff)],
             )
             .map_err(|error| error.to_string())?;
         Ok(())
     }
+}
+
+/// Formats a DateTime<Utc> in SQLite-compatible format (space-separated, no timezone suffix).
+/// This ensures consistent lexicographic comparison with SQLite's datetime() output.
+fn format_sqlite_datetime(dt: DateTime<Utc>) -> String {
+    dt.format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 #[cfg(test)]

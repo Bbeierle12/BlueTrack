@@ -24,7 +24,7 @@ impl BluetoothApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         configure_theme(&cc.egui_ctx);
         let settings = Settings::load();
-        let scanner = ScannerHandle::spawn(settings.clone());
+        let scanner = ScannerHandle::spawn(settings.clone(), cc.egui_ctx.clone());
 
         Self {
             snapshot: AppSnapshot::default(),
@@ -54,7 +54,9 @@ impl BluetoothApp {
 impl eframe::App for BluetoothApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_snapshot();
-        ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        // Fallback repaint for time-based displays ("Xs ago" labels).
+        // Primary repaint is push-driven by the worker via ctx.request_repaint().
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
 
         if let Some(action) = ui::render(
             ctx,

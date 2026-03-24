@@ -4,7 +4,7 @@ use std::f32::consts::TAU;
 
 use eframe::egui::{self, RichText};
 
-use crate::model::{AppSnapshot, DeviceRecord, LogLevel, format_relative_time};
+use crate::model::{AppSnapshot, DeviceRecord, LogLevel, format_duration_since, format_relative_time};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewTab {
@@ -77,7 +77,7 @@ pub fn render(
             ui.selectable_value(selected_tab, ViewTab::Map, "Proximity Radar");
             ui.add_space(16.0);
             ui.label(
-                RichText::new(format!("Runtime: {}", format_relative_time(snapshot.metrics.started_at)))
+                RichText::new(format!("Runtime: {}", format_duration_since(snapshot.metrics.started_at)))
                     .small()
                     .color(egui::Color32::from_rgb(140, 150, 160)),
             );
@@ -176,9 +176,10 @@ fn render_scan_view(
         return;
     }
 
+    // Snapshot devices are pre-sorted by stability score in emit_snapshot.
     let devices: Vec<&DeviceRecord> = snapshot
-        .sorted_devices()
-        .into_iter()
+        .devices
+        .iter()
         .filter(|d| match scan_filter {
             ScanFilter::Live => !d.stale,
             ScanFilter::Stale => d.stale,

@@ -16,6 +16,7 @@ pub struct ServiceDataEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DeviceRecord {
     pub address: String,
     pub adapter_name: String,
@@ -51,6 +52,48 @@ pub struct DeviceRecord {
     pub active_days: u32,
     pub last_seen_day: String,
     pub stale: bool,
+}
+
+impl Default for DeviceRecord {
+    fn default() -> Self {
+        let now = Utc::now();
+        Self {
+            address: String::new(),
+            adapter_name: String::new(),
+            name: None,
+            alias: None,
+            address_type: None,
+            icon: None,
+            class: None,
+            appearance: None,
+            modalias: None,
+            rssi: None,
+            rssi_min: None,
+            rssi_max: None,
+            rssi_sum: 0,
+            rssi_sum_squares: 0.0,
+            rssi_samples: 0,
+            tx_power: None,
+            battery_percentage: None,
+            paired: false,
+            trusted: false,
+            connected: false,
+            blocked: false,
+            services_resolved: false,
+            legacy_pairing: false,
+            wake_allowed: false,
+            uuids: Vec::new(),
+            manufacturer_data: Vec::new(),
+            service_data: Vec::new(),
+            first_seen: now,
+            last_seen: now,
+            seen_count: 0,
+            advertisement_count: 0,
+            active_days: 1,
+            last_seen_day: now.format("%Y-%m-%d").to_string(),
+            stale: false,
+        }
+    }
 }
 
 impl DeviceRecord {
@@ -325,7 +368,7 @@ impl AppSnapshot {
     }
 }
 
-fn compare_option_i16(left: Option<i16>, right: Option<i16>) -> Ordering {
+pub(crate) fn compare_option_i16(left: Option<i16>, right: Option<i16>) -> Ordering {
     match (left, right) {
         (Some(left), Some(right)) => left.cmp(&right),
         (Some(_), None) => Ordering::Greater,
@@ -357,6 +400,20 @@ pub fn format_relative_time(time: DateTime<Utc>) -> String {
         format!("{}h ago", delta.num_hours())
     } else {
         format!("{}d ago", delta.num_days())
+    }
+}
+
+/// Formats elapsed time since `start` as a compact duration string (no "ago" suffix).
+pub fn format_duration_since(start: DateTime<Utc>) -> String {
+    let delta = Utc::now().signed_duration_since(start);
+    if delta.num_seconds() < 60 {
+        format!("{}s", delta.num_seconds().max(0))
+    } else if delta.num_minutes() < 60 {
+        format!("{}m", delta.num_minutes())
+    } else if delta.num_hours() < 48 {
+        format!("{}h", delta.num_hours())
+    } else {
+        format!("{}d", delta.num_days())
     }
 }
 

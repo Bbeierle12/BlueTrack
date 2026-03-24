@@ -6,6 +6,7 @@ use std::{
 use bluer::{
     Adapter, AdapterEvent, Address, DeviceProperty, DiscoveryFilter, DiscoveryTransport, Session,
 };
+use eframe::egui;
 use chrono::Utc;
 use futures::StreamExt;
 use tokio::{
@@ -20,7 +21,7 @@ use tokio::{
 use crate::{
     model::{
         AdapterStatus, AppSnapshot, DeviceRecord, EventLogEntry, LogLevel, ManufacturerEntry,
-        RuntimeMetrics, ServiceDataEntry, bytes_to_hex,
+        RuntimeMetrics, ServiceDataEntry, bytes_to_hex, compare_option_i16,
     },
     settings::Settings,
     store::Store,
@@ -32,7 +33,7 @@ pub struct ScannerHandle {
 }
 
 impl ScannerHandle {
-    pub fn spawn(settings: Settings) -> Self {
+    pub fn spawn(settings: Settings, repaint_ctx: egui::Context) -> Self {
         let (command_tx, command_rx) = unbounded_channel();
         let (snapshot_tx, snapshot_rx) = watch::channel(AppSnapshot::default());
 
@@ -46,7 +47,7 @@ impl ScannerHandle {
                     .expect("runtime");
 
                 runtime.block_on(async move {
-                    let mut worker = Worker::new(settings, command_rx, snapshot_tx);
+                    let mut worker = Worker::new(settings, command_rx, snapshot_tx, repaint_ctx);
                     worker.run().await;
                 });
             })
@@ -84,12 +85,14 @@ enum WorkerCommand {
 
 enum InternalEvent {
     AdapterEvent(AdapterEvent),
+    ScanEnded,
 }
 
 struct Worker {
     settings: Settings,
     commands: UnboundedReceiver<WorkerCommand>,
     snapshot_tx: watch::Sender<AppSnapshot>,
+    repaint_ctx: egui::Context,
     internal_tx: UnboundedSender<InternalEvent>,
     internal_rx: UnboundedReceiver<InternalEvent>,
     store: Option<Store>,
@@ -106,6 +109,7 @@ struct Worker {
     sighting_throttle: HashMap<String, chrono::DateTime<Utc>>,
     upsert_throttle: HashMap<String, chrono::DateTime<Utc>>,
     last_snapshot_at: chrono::DateTime<Utc>,
+    tick_count: u64,
 }
 
 impl Worker {
@@ -113,6 +117,7 @@ impl Worker {
         settings: Settings,
         commands: UnboundedReceiver<WorkerCommand>,
         snapshot_tx: watch::Sender<AppSnapshot>,
+        repaint_ctx: egui::Context,
     ) -> Self {
         let (internal_tx, internal_rx) = unbounded_channel();
         let store = Store::open(settings.database_path().as_path()).ok();
@@ -135,6 +140,7 @@ impl Worker {
             settings,
             commands,
             snapshot_tx,
+            repaint_ctx,
             internal_tx,
             internal_rx,
             store,
@@ -151,6 +157,7 @@ impl Worker {
             sighting_throttle: HashMap::new(),
             upsert_throttle: HashMap::new(),
             last_snapshot_at: chrono::DateTime::<Utc>::MIN_UTC,
+            tick_count: 0,
         }
     }
 
@@ -179,10 +186,15 @@ impl Worker {
         loop {
             tokio::select! {
                 _ = tick.tick() => {
+                    self.tick_count = self.tick_count.wrapping_add(1);
                     self.mark_stale_devices();
                     self.refresh_adapters().await;
-                    if let Some(store) = &self.store {
-                        let _ = store.prune_old_sightings(self.settings.retention_days);
+                    // Prune old sightings every ~60 ticks (~5 min at default interval)
+                    // instead of every tick, to avoid unnecessary DB churn.
+                    if self.tick_count % 60 == 0 {
+                        if let Some(store) = &self.store {
+                            let _ = store.prune_old_sightings(self.settings.retention_days);
+                        }
                     }
                     self.sighting_throttle.retain(|address, _| self.devices.contains_key(address));
                     self.upsert_throttle.retain(|address, _| self.devices.contains_key(address));
@@ -206,6 +218,13 @@ impl Worker {
                 Some(event) = self.internal_rx.recv() => {
                     match event {
                         InternalEvent::AdapterEvent(event) => self.handle_adapter_event(event).await,
+                        InternalEvent::ScanEnded => {
+                            self.scan_task.take();
+                            self.scan_active = false;
+                            self.log(LogLevel::Warn, "Discovery ended unexpectedly (adapter removed or BlueZ stopped)");
+                            self.status_line = "Scan ended unexpectedly".to_string();
+                            self.emit_snapshot();
+                        }
                     }
                 }
                 else => break,
@@ -262,7 +281,13 @@ impl Worker {
     }
 
     async fn start_scan(&mut self) {
-        self.stop_scan();
+        if self.scan_task.is_some() {
+            self.stop_scan();
+            // Allow BlueZ time to tear down the previous HCI scan.
+            // Without this, StartDiscovery can race with StopDiscovery
+            // and return org.bluez.Error.InProgress (bluer issue #47).
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
 
         let Some(session) = &self.session else {
             self.fail("Scan start requested before BlueZ session existed".to_string());
@@ -325,9 +350,12 @@ impl Worker {
                 self.scan_task = Some(tokio::spawn(async move {
                     while let Some(event) = stream.next().await {
                         if tx.send(InternalEvent::AdapterEvent(event)).is_err() {
-                            break;
+                            return;
                         }
                     }
+                    // Stream ended — BlueZ stopped discovery externally,
+                    // adapter was removed, or the session was terminated.
+                    let _ = tx.send(InternalEvent::ScanEnded);
                 }));
             }
             Err(error) => {
@@ -565,7 +593,14 @@ impl Worker {
         self.metrics.random_devices = random_devices;
 
         let mut devices = self.devices.values().cloned().collect::<Vec<_>>();
-        devices.sort_by(|left, right| right.last_seen.cmp(&left.last_seen));
+        devices.sort_by(|left, right| {
+            right
+                .stability_score()
+                .cmp(&left.stability_score())
+                .then_with(|| right.last_seen.cmp(&left.last_seen))
+                .then_with(|| compare_option_i16(right.rssi, left.rssi))
+                .then_with(|| left.address.cmp(&right.address))
+        });
 
         let snapshot = AppSnapshot {
             generated_at: Utc::now(),
@@ -580,6 +615,7 @@ impl Worker {
         };
 
         self.snapshot_tx.send_replace(snapshot);
+        self.repaint_ctx.request_repaint();
     }
 
     fn select_adapter_name(&self) -> Option<String> {
