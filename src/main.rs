@@ -1,11 +1,4 @@
-mod app;
-mod backend;
-mod model;
-mod settings;
-mod store;
-mod ui;
-
-use app::BluetoothApp;
+use bluetooth_mapper::app::BluetoothApp;
 use eframe::egui;
 
 fn main() -> eframe::Result<()> {

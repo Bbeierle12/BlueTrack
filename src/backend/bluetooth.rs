@@ -485,7 +485,7 @@ impl Worker {
             }
         }
 
-        record.note_advertisement(now, current_rssi, is_first);
+        record.note_advertisement(now, current_rssi);
 
         let is_public = record.is_public_address();
 
@@ -548,20 +548,9 @@ impl Worker {
     }
 
     fn mark_stale_devices(&mut self) {
-        let now = Utc::now();
         let stale_after = chrono::Duration::seconds(self.settings.stale_after_seconds as i64);
-        // Random-address devices that have been stale for 2x the timeout are
-        // ephemeral MAC rotations — drop them so the HashMap doesn't grow forever.
         let purge_after = chrono::Duration::seconds(self.settings.stale_after_seconds as i64 * 2);
-
-        self.devices.retain(|_, device| {
-            let age = now.signed_duration_since(device.last_seen);
-            if age > stale_after {
-                device.mark_stale();
-            }
-            // Keep public-address devices forever; purge stale random ones.
-            device.is_public_address() || age <= purge_after
-        });
+        apply_stale_policy(&mut self.devices, stale_after, purge_after, Utc::now());
     }
 
     fn emit_snapshot(&mut self) {
@@ -624,6 +613,26 @@ impl Worker {
     }
 }
 
+/// Applies the stale/purge policy to a device map.
+///
+/// Devices older than `stale_after` are marked stale.
+/// Non-public devices older than `purge_after` are removed entirely.
+/// Public-address devices are always retained.
+pub(crate) fn apply_stale_policy(
+    devices: &mut HashMap<String, DeviceRecord>,
+    stale_after: chrono::Duration,
+    purge_after: chrono::Duration,
+    now: chrono::DateTime<Utc>,
+) {
+    devices.retain(|_, device| {
+        let age = now.signed_duration_since(device.last_seen);
+        if age > stale_after {
+            device.mark_stale();
+        }
+        device.is_public_address() || age <= purge_after
+    });
+}
+
 fn should_persist_sighting(
     previous: Option<&chrono::DateTime<Utc>>,
     now: chrono::DateTime<Utc>,
@@ -640,5 +649,161 @@ fn transport_label(transport: DiscoveryTransport) -> &'static str {
         DiscoveryTransport::BrEdr => "BR/EDR",
         DiscoveryTransport::Le => "LE",
         _ => "auto",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── should_persist_sighting ─────────────────────────────────────
+
+    #[test]
+    fn persist_sighting_no_previous() {
+        let now = Utc::now();
+        assert!(should_persist_sighting(None, now));
+    }
+
+    #[test]
+    fn persist_sighting_within_throttle() {
+        let now = Utc::now();
+        let prev = now - chrono::Duration::seconds(5);
+        assert!(!should_persist_sighting(Some(&prev), now));
+    }
+
+    #[test]
+    fn persist_sighting_exactly_at_threshold() {
+        let now = Utc::now();
+        let prev = now - chrono::Duration::seconds(10);
+        assert!(should_persist_sighting(Some(&prev), now));
+    }
+
+    #[test]
+    fn persist_sighting_past_threshold() {
+        let now = Utc::now();
+        let prev = now - chrono::Duration::seconds(15);
+        assert!(should_persist_sighting(Some(&prev), now));
+    }
+
+    // ── transport_label ─────────────────────────────────────────────
+
+    #[test]
+    fn transport_label_values() {
+        assert_eq!(transport_label(DiscoveryTransport::Auto), "auto");
+        assert_eq!(transport_label(DiscoveryTransport::BrEdr), "BR/EDR");
+        assert_eq!(transport_label(DiscoveryTransport::Le), "LE");
+    }
+
+    // ── apply_stale_policy ──────────────────────────────────────────
+
+    #[test]
+    fn stale_policy_marks_old_devices_stale() {
+        let now = Utc::now();
+        let stale_after = chrono::Duration::seconds(30);
+        let purge_after = chrono::Duration::seconds(60);
+
+        let mut devices = HashMap::new();
+        let mut d = DeviceRecord::new("AA:BB:CC:DD:EE:FF", "hci0", now - chrono::Duration::seconds(35));
+        d.address_type = Some("public".into());
+        devices.insert(d.address.clone(), d);
+
+        apply_stale_policy(&mut devices, stale_after, purge_after, now);
+
+        assert!(devices.get("AA:BB:CC:DD:EE:FF").unwrap().stale);
+    }
+
+    #[test]
+    fn stale_policy_keeps_recent_devices_live() {
+        let now = Utc::now();
+        let stale_after = chrono::Duration::seconds(30);
+        let purge_after = chrono::Duration::seconds(60);
+
+        let mut devices = HashMap::new();
+        let d = DeviceRecord::new("AA:BB:CC:DD:EE:FF", "hci0", now - chrono::Duration::seconds(10));
+        devices.insert(d.address.clone(), d);
+
+        apply_stale_policy(&mut devices, stale_after, purge_after, now);
+
+        assert!(!devices.get("AA:BB:CC:DD:EE:FF").unwrap().stale);
+    }
+
+    #[test]
+    fn stale_policy_purges_old_random_devices() {
+        let now = Utc::now();
+        let stale_after = chrono::Duration::seconds(30);
+        let purge_after = chrono::Duration::seconds(60);
+
+        let mut devices = HashMap::new();
+        let mut d = DeviceRecord::new("AA:BB:CC:DD:EE:FF", "hci0", now - chrono::Duration::seconds(65));
+        d.address_type = Some("random".into());
+        devices.insert(d.address.clone(), d);
+
+        apply_stale_policy(&mut devices, stale_after, purge_after, now);
+
+        assert!(devices.is_empty(), "random device past purge_after should be removed");
+    }
+
+    #[test]
+    fn stale_policy_keeps_old_public_devices() {
+        let now = Utc::now();
+        let stale_after = chrono::Duration::seconds(30);
+        let purge_after = chrono::Duration::seconds(60);
+
+        let mut devices = HashMap::new();
+        let mut d = DeviceRecord::new("AA:BB:CC:DD:EE:FF", "hci0", now - chrono::Duration::seconds(65));
+        d.address_type = Some("public".into());
+        devices.insert(d.address.clone(), d);
+
+        apply_stale_policy(&mut devices, stale_after, purge_after, now);
+
+        assert_eq!(devices.len(), 1, "public device should be kept");
+        assert!(devices.get("AA:BB:CC:DD:EE:FF").unwrap().stale);
+    }
+
+    #[test]
+    fn stale_policy_mixed_devices() {
+        let now = Utc::now();
+        let stale_after = chrono::Duration::seconds(30);
+        let purge_after = chrono::Duration::seconds(60);
+
+        let mut devices = HashMap::new();
+
+        // Recent device (no address_type) — kept, not stale
+        let d1 = DeviceRecord::new("AA:00:00:00:00:01", "hci0", now - chrono::Duration::seconds(10));
+        devices.insert(d1.address.clone(), d1);
+
+        // Old random device — purged
+        let mut d2 = DeviceRecord::new("AA:00:00:00:00:02", "hci0", now - chrono::Duration::seconds(65));
+        d2.address_type = Some("random".into());
+        devices.insert(d2.address.clone(), d2);
+
+        // Old public device — kept but stale
+        let mut d3 = DeviceRecord::new("AA:00:00:00:00:03", "hci0", now - chrono::Duration::seconds(65));
+        d3.address_type = Some("public".into());
+        devices.insert(d3.address.clone(), d3);
+
+        apply_stale_policy(&mut devices, stale_after, purge_after, now);
+
+        assert_eq!(devices.len(), 2);
+        assert!(devices.contains_key("AA:00:00:00:00:01"));
+        assert!(!devices.contains_key("AA:00:00:00:00:02"));
+        assert!(devices.contains_key("AA:00:00:00:00:03"));
+        assert!(!devices.get("AA:00:00:00:00:01").unwrap().stale);
+        assert!(devices.get("AA:00:00:00:00:03").unwrap().stale);
+    }
+
+    #[test]
+    fn stale_policy_at_exact_boundary_not_stale() {
+        let now = Utc::now();
+        let stale_after = chrono::Duration::seconds(30);
+        let purge_after = chrono::Duration::seconds(60);
+
+        let mut devices = HashMap::new();
+        let d = DeviceRecord::new("AA:BB:CC:DD:EE:FF", "hci0", now - chrono::Duration::seconds(30));
+        devices.insert(d.address.clone(), d);
+
+        apply_stale_policy(&mut devices, stale_after, purge_after, now);
+
+        assert!(!devices.get("AA:BB:CC:DD:EE:FF").unwrap().stale);
     }
 }

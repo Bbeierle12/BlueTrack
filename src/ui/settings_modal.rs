@@ -198,3 +198,38 @@ impl SettingsModal {
         .inner
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::Settings;
+
+    #[test]
+    fn new_copies_settings() {
+        let mut settings = Settings::default();
+        settings.stale_after_seconds = 42;
+        settings.min_rssi = -80;
+
+        let modal = SettingsModal::new(&settings);
+        assert_eq!(modal.draft.stale_after_seconds, 42);
+        assert_eq!(modal.draft.min_rssi, -80);
+    }
+
+    #[test]
+    fn new_starts_not_dirty() {
+        let modal = SettingsModal::new(&Settings::default());
+        assert!(!modal.dirty);
+    }
+
+    #[test]
+    fn new_starts_with_no_errors() {
+        let modal = SettingsModal::new(&Settings::default());
+        assert!(modal.errors.is_empty());
+    }
+
+    #[test]
+    fn new_starts_with_no_save_error() {
+        let modal = SettingsModal::new(&Settings::default());
+        assert!(modal.save_error.is_none());
+    }
+}

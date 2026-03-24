@@ -555,13 +555,12 @@ fn draw_device_label(
     );
 }
 
-fn truncate_name(name: &str, max: usize) -> String {
-    if name.len() <= max {
+pub(crate) fn truncate_name(name: &str, max: usize) -> String {
+    if name.chars().count() <= max {
         name.to_string()
     } else {
-        let mut s = name[..max - 1].to_string();
-        s.push('\u{2026}'); // ellipsis
-        s
+        let truncated: String = name.chars().take(max - 1).collect();
+        format!("{truncated}\u{2026}")
     }
 }
 
@@ -577,7 +576,7 @@ const COLOR_STALE: egui::Color32 = egui::Color32::from_rgb(209, 135, 61);
 const COLOR_ERROR: egui::Color32 = egui::Color32::from_rgb(220, 82, 70);
 
 /// Map a device's RSSI to a 0.0..1.0 fraction where 0 = center, 1 = edge.
-fn rssi_to_fraction(device: &DeviceRecord) -> f32 {
+pub(crate) fn rssi_to_fraction(device: &DeviceRecord) -> f32 {
     let rssi = device
         .rssi
         .or_else(|| device.avg_rssi().map(|v| v.round() as i16));
@@ -593,7 +592,7 @@ fn rssi_to_fraction(device: &DeviceRecord) -> f32 {
     }
 }
 
-fn band_color(device: &DeviceRecord) -> egui::Color32 {
+pub(crate) fn band_color(device: &DeviceRecord) -> egui::Color32 {
     match device.proximity_band() {
         "Near" => COLOR_NEAR,
         "Mid" => COLOR_MID,
@@ -797,6 +796,206 @@ fn render_event_log(ui: &mut egui::Ui, snapshot: &AppSnapshot) {
     });
 }
 
-fn yes_no(value: bool) -> &'static str {
+pub(crate) fn yes_no(value: bool) -> &'static str {
     if value { "Yes" } else { "No" }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn fixed_time() -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap()
+    }
+
+    fn make_device(address: &str) -> DeviceRecord {
+        DeviceRecord::new(address, "hci0", fixed_time())
+    }
+
+    // ── truncate_name ───────────────────────────────────────────────
+
+    #[test]
+    fn truncate_name_short_string_unchanged() {
+        assert_eq!(truncate_name("Hello", 10), "Hello");
+    }
+
+    #[test]
+    fn truncate_name_exact_length_unchanged() {
+        assert_eq!(truncate_name("12345", 5), "12345");
+    }
+
+    #[test]
+    fn truncate_name_long_string_truncated() {
+        let result = truncate_name("Hello World", 6);
+        assert_eq!(result, "Hello\u{2026}");
+        assert_eq!(result.chars().count(), 6);
+    }
+
+    #[test]
+    fn truncate_name_multibyte_no_panic() {
+        // Japanese characters are 3 bytes each in UTF-8
+        let name = "日本語テストデバイス";
+        let result = truncate_name(name, 5);
+        assert_eq!(result.chars().count(), 5);
+        assert!(result.ends_with('\u{2026}'));
+    }
+
+    #[test]
+    fn truncate_name_emoji_no_panic() {
+        let name = "📱🔵📡🎧🎵Speaker";
+        let result = truncate_name(name, 4);
+        assert_eq!(result.chars().count(), 4);
+        assert!(result.ends_with('\u{2026}'));
+    }
+
+    #[test]
+    fn truncate_name_mixed_ascii_multibyte() {
+        let name = "BT-日本語";
+        let result = truncate_name(name, 5);
+        assert_eq!(result.chars().count(), 5);
+        assert!(result.ends_with('\u{2026}'));
+    }
+
+    #[test]
+    fn truncate_name_single_char_max() {
+        // max=1 means 0 chars + ellipsis
+        let result = truncate_name("Hello", 1);
+        assert_eq!(result, "\u{2026}");
+    }
+
+    // ── rssi_to_fraction ────────────────────────────────────────────
+
+    #[test]
+    fn rssi_to_fraction_zero_dbm() {
+        let mut d = make_device("AA:00:00:00:00:01");
+        d.rssi = Some(0);
+        assert!((rssi_to_fraction(&d) - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn rssi_to_fraction_minus_100() {
+        let mut d = make_device("AA:00:00:00:00:01");
+        d.rssi = Some(-100);
+        assert!((rssi_to_fraction(&d) - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn rssi_to_fraction_minus_50() {
+        let mut d = make_device("AA:00:00:00:00:01");
+        d.rssi = Some(-50);
+        assert!((rssi_to_fraction(&d) - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn rssi_to_fraction_clamped_below_minus_100() {
+        let mut d = make_device("AA:00:00:00:00:01");
+        d.rssi = Some(-120);
+        // Should clamp to -100, so fraction = 1.0
+        assert!((rssi_to_fraction(&d) - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn rssi_to_fraction_clamped_above_zero() {
+        let mut d = make_device("AA:00:00:00:00:01");
+        d.rssi = Some(10);
+        // Should clamp to 0, so fraction = 0.0
+        assert!((rssi_to_fraction(&d) - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn rssi_to_fraction_stale_no_rssi() {
+        let mut d = make_device("AA:00:00:00:00:01");
+        d.mark_stale();
+        assert!((rssi_to_fraction(&d) - 0.92).abs() < 0.01);
+    }
+
+    #[test]
+    fn rssi_to_fraction_unknown_no_rssi() {
+        let d = make_device("AA:00:00:00:00:01");
+        assert!((rssi_to_fraction(&d) - 0.80).abs() < 0.01);
+    }
+
+    #[test]
+    fn rssi_to_fraction_falls_back_to_avg() {
+        let mut d = make_device("AA:00:00:00:00:01");
+        d.rssi = None;
+        d.rssi_sum = -50;
+        d.rssi_sum_squares = 2500.0;
+        d.rssi_samples = 1;
+        // avg_rssi = -50, fraction = 0.5
+        assert!((rssi_to_fraction(&d) - 0.5).abs() < 0.01);
+    }
+
+    // ── band_color ──────────────────────────────────────────────────
+
+    #[test]
+    fn band_color_near() {
+        let mut d = make_device("AA:00:00:00:00:01");
+        d.rssi = Some(-50);
+        assert_eq!(band_color(&d), COLOR_NEAR);
+    }
+
+    #[test]
+    fn band_color_mid() {
+        let mut d = make_device("AA:00:00:00:00:01");
+        d.rssi = Some(-65);
+        assert_eq!(band_color(&d), COLOR_MID);
+    }
+
+    #[test]
+    fn band_color_far() {
+        let mut d = make_device("AA:00:00:00:00:01");
+        d.rssi = Some(-80);
+        assert_eq!(band_color(&d), COLOR_FAR);
+    }
+
+    #[test]
+    fn band_color_stale() {
+        let mut d = make_device("AA:00:00:00:00:01");
+        d.mark_stale();
+        assert_eq!(band_color(&d), COLOR_STALE);
+    }
+
+    // ── yes_no ──────────────────────────────────────────────────────
+
+    #[test]
+    fn yes_no_values() {
+        assert_eq!(yes_no(true), "Yes");
+        assert_eq!(yes_no(false), "No");
+    }
+
+    // ── truncate_name edge cases ────────────────────────────────────
+
+    #[test]
+    fn truncate_name_empty_string() {
+        assert_eq!(truncate_name("", 10), "");
+    }
+
+    #[test]
+    fn truncate_name_two_char_max() {
+        let result = truncate_name("Hello", 2);
+        assert_eq!(result, "H\u{2026}");
+        assert_eq!(result.chars().count(), 2);
+    }
+
+    // ── rssi_to_fraction monotonicity ───────────────────────────────
+
+    #[test]
+    fn rssi_to_fraction_increases_with_distance() {
+        let mut close = make_device("AA:00:00:00:00:01");
+        let mut far = make_device("AA:00:00:00:00:02");
+        close.rssi = Some(-30);
+        far.rssi = Some(-80);
+        assert!(rssi_to_fraction(&close) < rssi_to_fraction(&far));
+    }
+
+    // ── band_color unknown ──────────────────────────────────────────
+
+    #[test]
+    fn band_color_unknown_device() {
+        let d = make_device("AA:00:00:00:00:01");
+        assert_eq!(d.proximity_band(), "Unknown");
+        assert_eq!(band_color(&d), egui::Color32::from_rgb(180, 180, 180));
+    }
 }
