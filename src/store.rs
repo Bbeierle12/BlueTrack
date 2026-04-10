@@ -332,7 +332,7 @@ mod tests {
             .conn
             .execute(
                 "INSERT INTO sightings (address, adapter_name, seen_at, proximity_band)
-                 VALUES ('AA:BB:CC:DD:EE:FF', 'hci0', datetime('now', '-60 day'), 'Far')",
+                 VALUES ('AA:BB:CC:DD:EE:FF', 'hci0', datetime('now', '-60 days'), 'Far')",
                 [],
             )
             .unwrap();
