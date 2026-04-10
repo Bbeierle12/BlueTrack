@@ -1,23 +1,30 @@
+use chrono::{DateTime, Utc};
 use eframe::egui::{self, FontFamily, FontId, TextStyle, Visuals};
 
 use crate::{
     backend::bluetooth::ScannerHandle,
-    model::AppSnapshot,
+    model::{AppSnapshot, DeviceRecord},
     settings::Settings,
     ui::{
-        self, ScanFilter, TopAction, ViewTab,
+        self, AppAction, ScanFilter, ViewTab,
         settings_modal::{SettingsModal, SettingsModalResult},
     },
 };
 
 pub struct BluetoothApp {
     snapshot: AppSnapshot,
+    // Frozen copy of the device list shown in the Scan tab. Only refreshed
+    // when the user clicks the Scan button, so rows don't reorder while the
+    // live passive scan keeps feeding the Proximity Radar.
+    captured_devices: Vec<DeviceRecord>,
+    captured_at: Option<DateTime<Utc>>,
     scanner: ScannerHandle,
     settings: Settings,
     selected_tab: ViewTab,
     scan_filter: ScanFilter,
     selected_device: Option<String>,
     settings_modal: Option<SettingsModal>,
+    rename_draft: Option<String>,
 }
 
 impl BluetoothApp {
@@ -28,12 +35,15 @@ impl BluetoothApp {
 
         Self {
             snapshot: AppSnapshot::default(),
+            captured_devices: Vec::new(),
+            captured_at: None,
             scanner,
             settings,
             selected_tab: ViewTab::Scan,
             scan_filter: ScanFilter::Live,
             selected_device: None,
             settings_modal: None,
+            rename_draft: None,
         }
     }
 
@@ -49,28 +59,65 @@ impl BluetoothApp {
             self.snapshot = snapshot;
         }
     }
+
+    fn capture_scan(&mut self) {
+        self.captured_devices = self.snapshot.devices.clone();
+        self.captured_at = Some(Utc::now());
+        if !self.snapshot.scan_active {
+            self.scanner.start_scan();
+        }
+    }
 }
 
 impl eframe::App for BluetoothApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_snapshot();
-        // Fallback repaint for time-based displays ("Xs ago" labels).
-        // Primary repaint is push-driven by the worker via ctx.request_repaint().
         ctx.request_repaint_after(std::time::Duration::from_secs(1));
 
         if let Some(action) = ui::render(
             ctx,
             &self.snapshot,
+            &self.captured_devices,
+            self.captured_at,
             &mut self.selected_tab,
             &mut self.scan_filter,
             &mut self.selected_device,
+            &mut self.rename_draft,
         ) {
             match action {
-                TopAction::StartScan => self.scanner.start_scan(),
-                TopAction::StopScan => self.scanner.stop_scan(),
-                TopAction::Refresh => self.scanner.refresh(),
-                TopAction::OpenSettings => {
+                AppAction::StartScan => self.scanner.start_scan(),
+                AppAction::StopScan => self.scanner.stop_scan(),
+                AppAction::Refresh => self.scanner.refresh(),
+                AppAction::CaptureScan => self.capture_scan(),
+                AppAction::OpenSettings => {
                     self.settings_modal = Some(SettingsModal::new(&self.settings));
+                }
+                AppAction::ConnectDevice(addr) => self.scanner.connect_device(addr),
+                AppAction::DisconnectDevice(addr) => self.scanner.disconnect_device(addr),
+                AppAction::SetTrusted { address, trusted } => {
+                    self.scanner.set_trusted(address, trusted)
+                }
+                AppAction::SetBlocked { address, blocked } => {
+                    // If we're forgetting a blocked device, clear selection
+                    self.scanner.set_blocked(address, blocked)
+                }
+                AppAction::ForgetDevice(addr) => {
+                    if self.selected_device.as_deref() == Some(addr.as_str()) {
+                        self.selected_device = None;
+                    }
+                    self.scanner.forget_device(addr);
+                }
+                AppAction::SetAlias { address, alias } => {
+                    self.scanner.set_alias(address, alias);
+                }
+                AppAction::SetAdapterPowered { adapter, powered } => {
+                    self.scanner.set_adapter_powered(adapter, powered);
+                }
+                AppAction::SetAdapterDiscoverable { adapter, discoverable } => {
+                    self.scanner.set_adapter_discoverable(adapter, discoverable);
+                }
+                AppAction::SetAdapterPairable { adapter, pairable } => {
+                    self.scanner.set_adapter_pairable(adapter, pairable);
                 }
             }
         }

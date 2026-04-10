@@ -19,9 +19,10 @@ use tokio::{
 };
 
 use crate::{
+    intelligence,
     model::{
         AdapterStatus, AppSnapshot, DeviceRecord, EventLogEntry, LogLevel, ManufacturerEntry,
-        RuntimeMetrics, ServiceDataEntry, bytes_to_hex, compare_option_i16,
+        RuntimeMetrics, ServiceDataEntry, bytes_to_hex,
     },
     settings::Settings,
     store::Store,
@@ -74,6 +75,42 @@ impl ScannerHandle {
     pub fn apply_settings(&self, settings: Settings) {
         let _ = self.commands.send(WorkerCommand::ApplySettings(settings));
     }
+
+    pub fn connect_device(&self, address: String) {
+        let _ = self.commands.send(WorkerCommand::ConnectDevice(address));
+    }
+
+    pub fn disconnect_device(&self, address: String) {
+        let _ = self.commands.send(WorkerCommand::DisconnectDevice(address));
+    }
+
+    pub fn set_trusted(&self, address: String, trusted: bool) {
+        let _ = self.commands.send(WorkerCommand::SetTrusted(address, trusted));
+    }
+
+    pub fn set_blocked(&self, address: String, blocked: bool) {
+        let _ = self.commands.send(WorkerCommand::SetBlocked(address, blocked));
+    }
+
+    pub fn forget_device(&self, address: String) {
+        let _ = self.commands.send(WorkerCommand::ForgetDevice(address));
+    }
+
+    pub fn set_alias(&self, address: String, alias: String) {
+        let _ = self.commands.send(WorkerCommand::SetAlias(address, alias));
+    }
+
+    pub fn set_adapter_powered(&self, adapter: String, powered: bool) {
+        let _ = self.commands.send(WorkerCommand::SetAdapterPowered(adapter, powered));
+    }
+
+    pub fn set_adapter_discoverable(&self, adapter: String, discoverable: bool) {
+        let _ = self.commands.send(WorkerCommand::SetAdapterDiscoverable(adapter, discoverable));
+    }
+
+    pub fn set_adapter_pairable(&self, adapter: String, pairable: bool) {
+        let _ = self.commands.send(WorkerCommand::SetAdapterPairable(adapter, pairable));
+    }
 }
 
 enum WorkerCommand {
@@ -81,6 +118,17 @@ enum WorkerCommand {
     StopScan,
     Refresh,
     ApplySettings(Settings),
+    // Device management
+    ConnectDevice(String),
+    DisconnectDevice(String),
+    SetTrusted(String, bool),
+    SetBlocked(String, bool),
+    ForgetDevice(String),
+    SetAlias(String, String),
+    // Adapter management
+    SetAdapterPowered(String, bool),
+    SetAdapterDiscoverable(String, bool),
+    SetAdapterPairable(String, bool),
 }
 
 enum InternalEvent {
@@ -129,6 +177,7 @@ impl Worker {
                 // Only restore public-address devices; random MACs are ephemeral.
                 if device.is_public_address() {
                     device.mark_stale();
+                    intelligence::enrich(&mut device);
                     devices.insert(device.address.clone(), device);
                 }
             }
@@ -213,6 +262,15 @@ impl Worker {
                                 self.start_scan().await;
                             }
                         }
+                        WorkerCommand::ConnectDevice(addr) => self.cmd_connect(&addr).await,
+                        WorkerCommand::DisconnectDevice(addr) => self.cmd_disconnect(&addr).await,
+                        WorkerCommand::SetTrusted(addr, v) => self.cmd_set_trusted(&addr, v).await,
+                        WorkerCommand::SetBlocked(addr, v) => self.cmd_set_blocked(&addr, v).await,
+                        WorkerCommand::ForgetDevice(addr) => self.cmd_forget(&addr).await,
+                        WorkerCommand::SetAlias(addr, alias) => self.cmd_set_alias(&addr, &alias).await,
+                        WorkerCommand::SetAdapterPowered(name, v) => self.cmd_adapter_powered(&name, v).await,
+                        WorkerCommand::SetAdapterDiscoverable(name, v) => self.cmd_adapter_discoverable(&name, v).await,
+                        WorkerCommand::SetAdapterPairable(name, v) => self.cmd_adapter_pairable(&name, v).await,
                     }
                 }
                 Some(event) = self.internal_rx.recv() => {
@@ -493,6 +551,7 @@ impl Worker {
                         .map(|(id, bytes)| ManufacturerEntry {
                             id,
                             payload_hex: bytes_to_hex(&bytes),
+                            company_name: None,
                         })
                         .collect::<Vec<_>>();
                     items.sort_by_key(|entry| entry.id);
@@ -514,6 +573,7 @@ impl Worker {
         }
 
         record.note_advertisement(now, current_rssi);
+        intelligence::enrich(record);
 
         let is_public = record.is_public_address();
 
@@ -597,8 +657,7 @@ impl Worker {
             right
                 .stability_score()
                 .cmp(&left.stability_score())
-                .then_with(|| right.last_seen.cmp(&left.last_seen))
-                .then_with(|| compare_option_i16(right.rssi, left.rssi))
+                .then_with(|| right.first_seen.cmp(&left.first_seen))
                 .then_with(|| left.address.cmp(&right.address))
         });
 
@@ -646,6 +705,303 @@ impl Worker {
         self.last_error = Some(message.clone());
         self.metrics.bluez_errors = self.metrics.bluez_errors.saturating_add(1);
         self.log(LogLevel::Error, message);
+    }
+
+    // ── Device management handlers ───────────────────────────────────────────
+
+    async fn cmd_connect(&mut self, address: &str) {
+        let result = match self.get_device(address).await {
+            Ok(device) => device.connect().await.map_err(|e| e.to_string()),
+            Err(e) => Err(e),
+        };
+        if self.apply_connect_result(address, result) {
+            self.sync_device_props(address).await;
+        }
+        self.emit_snapshot();
+    }
+
+    async fn cmd_disconnect(&mut self, address: &str) {
+        let result = match self.get_device(address).await {
+            Ok(device) => device.disconnect().await.map_err(|e| e.to_string()),
+            Err(e) => Err(e),
+        };
+        if self.apply_disconnect_result(address, result) {
+            self.sync_device_props(address).await;
+        }
+        self.emit_snapshot();
+    }
+
+    async fn cmd_set_trusted(&mut self, address: &str, trusted: bool) {
+        let result = match self.get_device(address).await {
+            Ok(device) => device.set_trusted(trusted).await.map_err(|e| e.to_string()),
+            Err(e) => Err(e),
+        };
+        self.apply_set_trusted(address, trusted, result);
+        self.emit_snapshot();
+    }
+
+    async fn cmd_set_blocked(&mut self, address: &str, blocked: bool) {
+        let result = match self.get_device(address).await {
+            Ok(device) => device.set_blocked(blocked).await.map_err(|e| e.to_string()),
+            Err(e) => Err(e),
+        };
+        self.apply_set_blocked(address, blocked, result);
+        self.emit_snapshot();
+    }
+
+    async fn cmd_forget(&mut self, address: &str) {
+        let result = self.do_remove_device(address).await;
+        self.apply_forget_result(address, result);
+        self.emit_snapshot();
+    }
+
+    async fn cmd_set_alias(&mut self, address: &str, alias: &str) {
+        let result = match self.get_device(address).await {
+            Ok(device) => device.set_alias(alias.to_string()).await.map_err(|e| e.to_string()),
+            Err(e) => Err(e),
+        };
+        self.apply_set_alias(address, alias, result);
+        self.emit_snapshot();
+    }
+
+    // ── Adapter management handlers ──────────────────────────────────────────
+
+    async fn cmd_adapter_powered(&mut self, adapter_name: &str, powered: bool) {
+        let result = self.do_set_adapter_powered(adapter_name, powered).await;
+        if self.apply_adapter_powered(adapter_name, powered, result) {
+            self.refresh_adapters().await;
+        }
+        self.emit_snapshot();
+    }
+
+    async fn cmd_adapter_discoverable(&mut self, adapter_name: &str, discoverable: bool) {
+        let result = self.do_set_adapter_discoverable(adapter_name, discoverable).await;
+        if self.apply_adapter_discoverable(adapter_name, discoverable, result) {
+            self.refresh_adapters().await;
+        }
+        self.emit_snapshot();
+    }
+
+    async fn cmd_adapter_pairable(&mut self, adapter_name: &str, pairable: bool) {
+        let result = self.do_set_adapter_pairable(adapter_name, pairable).await;
+        if self.apply_adapter_pairable(adapter_name, pairable, result) {
+            self.refresh_adapters().await;
+        }
+        self.emit_snapshot();
+    }
+
+    // ── Pure result-application helpers (testable without BlueZ) ────────────
+
+    /// Returns `true` if the caller should follow up with `sync_device_props`.
+    fn apply_connect_result(&mut self, address: &str, result: Result<(), String>) -> bool {
+        match result {
+            Ok(()) => {
+                self.log(LogLevel::Info, format!("Connected to {address}"));
+                true
+            }
+            Err(e) => {
+                self.fail(format!("Connect {address} failed: {e}"));
+                false
+            }
+        }
+    }
+
+    /// Returns `true` if the caller should follow up with `sync_device_props`.
+    fn apply_disconnect_result(&mut self, address: &str, result: Result<(), String>) -> bool {
+        match result {
+            Ok(()) => {
+                self.log(LogLevel::Info, format!("Disconnected from {address}"));
+                true
+            }
+            Err(e) => {
+                self.fail(format!("Disconnect {address} failed: {e}"));
+                false
+            }
+        }
+    }
+
+    fn apply_set_trusted(&mut self, address: &str, trusted: bool, result: Result<(), String>) {
+        match result {
+            Ok(()) => {
+                let verb = if trusted { "Trusted" } else { "Untrusted" };
+                self.log(LogLevel::Info, format!("{verb} {address}"));
+                if let Some(record) = self.devices.get_mut(address) {
+                    record.trusted = trusted;
+                }
+            }
+            Err(e) => self.fail(format!("Set trusted {address} failed: {e}")),
+        }
+    }
+
+    fn apply_set_blocked(&mut self, address: &str, blocked: bool, result: Result<(), String>) {
+        match result {
+            Ok(()) => {
+                let verb = if blocked { "Blocked" } else { "Unblocked" };
+                self.log(LogLevel::Info, format!("{verb} {address}"));
+                if let Some(record) = self.devices.get_mut(address) {
+                    record.blocked = blocked;
+                }
+            }
+            Err(e) => self.fail(format!("Set blocked {address} failed: {e}")),
+        }
+    }
+
+    fn apply_set_alias(&mut self, address: &str, alias: &str, result: Result<(), String>) {
+        match result {
+            Ok(()) => {
+                self.log(LogLevel::Info, format!("Renamed {address} → \"{alias}\""));
+                if let Some(record) = self.devices.get_mut(address) {
+                    record.alias = if alias.is_empty() {
+                        None
+                    } else {
+                        Some(alias.to_string())
+                    };
+                    if let Some(store) = &self.store {
+                        let _ = store.upsert_device(record);
+                    }
+                }
+            }
+            Err(e) => self.fail(format!("Set alias {address} failed: {e}")),
+        }
+    }
+
+    fn apply_forget_result(&mut self, address: &str, result: Result<(), String>) {
+        match result {
+            Ok(()) => {
+                self.devices.remove(address);
+                self.sighting_throttle.remove(address);
+                self.upsert_throttle.remove(address);
+                self.log(LogLevel::Info, format!("Forgot device {address}"));
+            }
+            Err(e) => self.fail(e),
+        }
+    }
+
+    /// Returns `true` if the caller should follow up with `refresh_adapters`.
+    fn apply_adapter_powered(&mut self, adapter_name: &str, powered: bool, result: Result<(), String>) -> bool {
+        match result {
+            Ok(()) => {
+                let verb = if powered { "Powered on" } else { "Powered off" };
+                self.log(LogLevel::Info, format!("{verb} {adapter_name}"));
+                true
+            }
+            Err(e) => {
+                self.fail(e);
+                false
+            }
+        }
+    }
+
+    /// Returns `true` if the caller should follow up with `refresh_adapters`.
+    fn apply_adapter_discoverable(&mut self, adapter_name: &str, discoverable: bool, result: Result<(), String>) -> bool {
+        match result {
+            Ok(()) => {
+                let verb = if discoverable { "Discoverable on" } else { "Discoverable off" };
+                self.log(LogLevel::Info, format!("{verb} {adapter_name}"));
+                true
+            }
+            Err(e) => {
+                self.fail(e);
+                false
+            }
+        }
+    }
+
+    /// Returns `true` if the caller should follow up with `refresh_adapters`.
+    fn apply_adapter_pairable(&mut self, adapter_name: &str, pairable: bool, result: Result<(), String>) -> bool {
+        match result {
+            Ok(()) => {
+                let verb = if pairable { "Pairable on" } else { "Pairable off" };
+                self.log(LogLevel::Info, format!("{verb} {adapter_name}"));
+                true
+            }
+            Err(e) => {
+                self.fail(e);
+                false
+            }
+        }
+    }
+
+    // ── BlueZ operation helpers (live-only, not unit-testable) ───────────────
+
+    async fn do_remove_device(&self, address: &str) -> Result<(), String> {
+        let session = self.session.as_ref().ok_or("No BlueZ session")?;
+        let adapter_name = self
+            .active_adapter
+            .clone()
+            .or_else(|| self.select_adapter_name())
+            .unwrap_or_else(|| "hci0".to_string());
+        let adapter = session
+            .adapter(&adapter_name)
+            .map_err(|e| format!("Cannot open adapter for forget: {e}"))?;
+        let addr = address
+            .parse::<bluer::Address>()
+            .map_err(|e| format!("Invalid address '{address}': {e}"))?;
+        adapter
+            .remove_device(addr)
+            .await
+            .map_err(|e| format!("Forget {address} failed: {e}"))
+    }
+
+    async fn do_set_adapter_powered(&self, adapter_name: &str, powered: bool) -> Result<(), String> {
+        let session = self.session.as_ref().ok_or("No BlueZ session".to_string())?;
+        let adapter = session
+            .adapter(adapter_name)
+            .map_err(|e| format!("Cannot open adapter {adapter_name}: {e}"))?;
+        adapter
+            .set_powered(powered)
+            .await
+            .map_err(|e| format!("Set powered {adapter_name} failed: {e}"))
+    }
+
+    async fn do_set_adapter_discoverable(&self, adapter_name: &str, discoverable: bool) -> Result<(), String> {
+        let session = self.session.as_ref().ok_or("No BlueZ session".to_string())?;
+        let adapter = session
+            .adapter(adapter_name)
+            .map_err(|e| format!("Cannot open adapter {adapter_name}: {e}"))?;
+        adapter
+            .set_discoverable(discoverable)
+            .await
+            .map_err(|e| format!("Set discoverable {adapter_name} failed: {e}"))
+    }
+
+    async fn do_set_adapter_pairable(&self, adapter_name: &str, pairable: bool) -> Result<(), String> {
+        let session = self.session.as_ref().ok_or("No BlueZ session".to_string())?;
+        let adapter = session
+            .adapter(adapter_name)
+            .map_err(|e| format!("Cannot open adapter {adapter_name}: {e}"))?;
+        adapter
+            .set_pairable(pairable)
+            .await
+            .map_err(|e| format!("Set pairable {adapter_name} failed: {e}"))
+    }
+
+    // ── Shared helpers ───────────────────────────────────────────────────────
+
+    /// Get a bluer Device handle for the given address string.
+    async fn get_device(&self, address: &str) -> Result<bluer::Device, String> {
+        let session = self.session.as_ref().ok_or("No BlueZ session")?;
+        let adapter_name = self
+            .active_adapter
+            .clone()
+            .or_else(|| self.select_adapter_name())
+            .unwrap_or_else(|| "hci0".to_string());
+        let adapter = session
+            .adapter(&adapter_name)
+            .map_err(|e| format!("Cannot open adapter: {e}"))?;
+        let addr = address
+            .parse::<bluer::Address>()
+            .map_err(|e| format!("Invalid address '{address}': {e}"))?;
+        adapter
+            .device(addr)
+            .map_err(|e| format!("Device {address} not found: {e}"))
+    }
+
+    /// Re-read device properties from BlueZ and update our in-memory record.
+    async fn sync_device_props(&mut self, address: &str) {
+        if let Ok(addr) = address.parse::<bluer::Address>() {
+            let _ = self.refresh_device(addr).await;
+        }
     }
 }
 
@@ -841,5 +1197,244 @@ mod tests {
         apply_stale_policy(&mut devices, stale_after, purge_after, now);
 
         assert!(!devices.get("AA:BB:CC:DD:EE:FF").unwrap().stale);
+    }
+
+    // ── Management apply_* helpers ──────────────────────────────────────────
+
+    /// Build a Worker with no BlueZ session, suitable for testing apply_* helpers.
+    fn make_test_worker() -> Worker {
+        use tokio::sync::{mpsc::unbounded_channel as ub, watch};
+        let (_, cmd_rx) = ub::<WorkerCommand>();
+        let (snap_tx, _) = watch::channel(crate::model::AppSnapshot::default());
+        let (int_tx, int_rx) = ub::<InternalEvent>();
+        Worker {
+            settings: crate::settings::Settings::default(),
+            commands: cmd_rx,
+            snapshot_tx: snap_tx,
+            repaint_ctx: egui::Context::default(),
+            internal_tx: int_tx,
+            internal_rx: int_rx,
+            store: None,
+            session: None,
+            devices: HashMap::new(),
+            adapters: Vec::new(),
+            scan_task: None,
+            active_adapter: None,
+            metrics: crate::model::RuntimeMetrics::default(),
+            event_log: VecDeque::with_capacity(16),
+            last_error: None,
+            scan_active: false,
+            status_line: "test".to_string(),
+            sighting_throttle: HashMap::new(),
+            upsert_throttle: HashMap::new(),
+            last_snapshot_at: chrono::DateTime::<Utc>::MIN_UTC,
+            tick_count: 0,
+        }
+    }
+
+    #[test]
+    fn apply_connect_success_logs_connected() {
+        let mut w = make_test_worker();
+        let should_sync = w.apply_connect_result("AA:BB:CC:DD:EE:FF", Ok(()));
+        assert!(should_sync);
+        assert!(w.event_log.front().unwrap().message.contains("Connected"));
+        assert!(w.last_error.is_none());
+    }
+
+    #[test]
+    fn apply_connect_error_logs_failure() {
+        let mut w = make_test_worker();
+        let should_sync = w.apply_connect_result("AA:BB:CC:DD:EE:FF", Err("refused".into()));
+        assert!(!should_sync);
+        assert!(w.last_error.is_some());
+    }
+
+    #[test]
+    fn apply_disconnect_success_logs_disconnected() {
+        let mut w = make_test_worker();
+        let should_sync = w.apply_disconnect_result("AA:BB:CC:DD:EE:FF", Ok(()));
+        assert!(should_sync);
+        assert!(w.event_log.front().unwrap().message.contains("Disconnected"));
+    }
+
+    #[test]
+    fn apply_disconnect_error_logs_failure() {
+        let mut w = make_test_worker();
+        let should_sync = w.apply_disconnect_result("AA:BB:CC:DD:EE:FF", Err("timeout".into()));
+        assert!(!should_sync);
+        assert!(w.last_error.is_some());
+    }
+
+    #[test]
+    fn apply_set_trusted_true_updates_record() {
+        let mut w = make_test_worker();
+        let addr = "AA:BB:CC:DD:EE:FF";
+        let mut d = DeviceRecord::new(addr, "hci0", Utc::now());
+        d.trusted = false;
+        w.devices.insert(addr.to_string(), d);
+        w.apply_set_trusted(addr, true, Ok(()));
+        assert!(w.devices[addr].trusted);
+        assert!(w.event_log.front().unwrap().message.contains("Trusted"));
+        assert!(w.last_error.is_none());
+    }
+
+    #[test]
+    fn apply_set_trusted_false_updates_record() {
+        let mut w = make_test_worker();
+        let addr = "AA:BB:CC:DD:EE:FF";
+        let mut d = DeviceRecord::new(addr, "hci0", Utc::now());
+        d.trusted = true;
+        w.devices.insert(addr.to_string(), d);
+        w.apply_set_trusted(addr, false, Ok(()));
+        assert!(!w.devices[addr].trusted);
+        assert!(w.event_log.front().unwrap().message.contains("Untrusted"));
+    }
+
+    #[test]
+    fn apply_set_trusted_error_logs_failure() {
+        let mut w = make_test_worker();
+        w.apply_set_trusted("AA:BB:CC:DD:EE:FF", true, Err("D-Bus error".into()));
+        assert!(w.last_error.is_some());
+        assert!(w.last_error.as_ref().unwrap().contains("D-Bus error"));
+    }
+
+    #[test]
+    fn apply_set_blocked_true_updates_record() {
+        let mut w = make_test_worker();
+        let addr = "AA:BB:CC:DD:EE:FF";
+        let mut d = DeviceRecord::new(addr, "hci0", Utc::now());
+        d.blocked = false;
+        w.devices.insert(addr.to_string(), d);
+        w.apply_set_blocked(addr, true, Ok(()));
+        assert!(w.devices[addr].blocked);
+        assert!(w.event_log.front().unwrap().message.contains("Blocked"));
+    }
+
+    #[test]
+    fn apply_set_blocked_false_updates_record() {
+        let mut w = make_test_worker();
+        let addr = "AA:BB:CC:DD:EE:FF";
+        let mut d = DeviceRecord::new(addr, "hci0", Utc::now());
+        d.blocked = true;
+        w.devices.insert(addr.to_string(), d);
+        w.apply_set_blocked(addr, false, Ok(()));
+        assert!(!w.devices[addr].blocked);
+        assert!(w.event_log.front().unwrap().message.contains("Unblocked"));
+    }
+
+    #[test]
+    fn apply_set_alias_sets_alias_on_device() {
+        let mut w = make_test_worker();
+        let addr = "AA:BB:CC:DD:EE:FF";
+        w.devices.insert(addr.to_string(), DeviceRecord::new(addr, "hci0", Utc::now()));
+        w.apply_set_alias(addr, "My Headphones", Ok(()));
+        assert_eq!(w.devices[addr].alias.as_deref(), Some("My Headphones"));
+        assert!(w.event_log.front().unwrap().message.contains("Renamed"));
+    }
+
+    #[test]
+    fn apply_set_alias_empty_clears_alias() {
+        let mut w = make_test_worker();
+        let addr = "AA:BB:CC:DD:EE:FF";
+        let mut d = DeviceRecord::new(addr, "hci0", Utc::now());
+        d.alias = Some("Old Name".to_string());
+        w.devices.insert(addr.to_string(), d);
+        w.apply_set_alias(addr, "", Ok(()));
+        assert!(w.devices[addr].alias.is_none());
+    }
+
+    #[test]
+    fn apply_set_alias_error_logs_failure() {
+        let mut w = make_test_worker();
+        w.apply_set_alias("AA:BB:CC:DD:EE:FF", "name", Err("not found".into()));
+        assert!(w.last_error.is_some());
+    }
+
+    #[test]
+    fn apply_forget_result_removes_device_and_throttles() {
+        let mut w = make_test_worker();
+        let addr = "AA:BB:CC:DD:EE:FF";
+        w.devices.insert(addr.to_string(), DeviceRecord::new(addr, "hci0", Utc::now()));
+        w.sighting_throttle.insert(addr.to_string(), Utc::now());
+        w.upsert_throttle.insert(addr.to_string(), Utc::now());
+        w.apply_forget_result(addr, Ok(()));
+        assert!(!w.devices.contains_key(addr));
+        assert!(!w.sighting_throttle.contains_key(addr));
+        assert!(!w.upsert_throttle.contains_key(addr));
+        assert!(w.event_log.front().unwrap().message.contains("Forgot"));
+    }
+
+    #[test]
+    fn apply_forget_result_error_preserves_device() {
+        let mut w = make_test_worker();
+        let addr = "AA:BB:CC:DD:EE:FF";
+        w.devices.insert(addr.to_string(), DeviceRecord::new(addr, "hci0", Utc::now()));
+        w.apply_forget_result(addr, Err("adapter gone".into()));
+        assert!(w.devices.contains_key(addr), "device must not be removed on error");
+        assert!(w.last_error.is_some());
+    }
+
+    #[test]
+    fn apply_adapter_powered_on_logs_and_returns_true() {
+        let mut w = make_test_worker();
+        let refresh = w.apply_adapter_powered("hci0", true, Ok(()));
+        assert!(refresh);
+        assert!(w.event_log.front().unwrap().message.contains("Powered on"));
+    }
+
+    #[test]
+    fn apply_adapter_powered_off_logs_and_returns_true() {
+        let mut w = make_test_worker();
+        let refresh = w.apply_adapter_powered("hci0", false, Ok(()));
+        assert!(refresh);
+        assert!(w.event_log.front().unwrap().message.contains("Powered off"));
+    }
+
+    #[test]
+    fn apply_adapter_powered_error_returns_false() {
+        let mut w = make_test_worker();
+        let refresh = w.apply_adapter_powered("hci0", true, Err("D-Bus failed".into()));
+        assert!(!refresh);
+        assert!(w.last_error.is_some());
+    }
+
+    #[test]
+    fn apply_adapter_discoverable_on_logs() {
+        let mut w = make_test_worker();
+        let refresh = w.apply_adapter_discoverable("hci0", true, Ok(()));
+        assert!(refresh);
+        assert!(w.event_log.front().unwrap().message.contains("Discoverable on"));
+    }
+
+    #[test]
+    fn apply_adapter_discoverable_off_logs() {
+        let mut w = make_test_worker();
+        let refresh = w.apply_adapter_discoverable("hci0", false, Ok(()));
+        assert!(refresh);
+        assert!(w.event_log.front().unwrap().message.contains("Discoverable off"));
+    }
+
+    #[test]
+    fn apply_adapter_pairable_on_logs() {
+        let mut w = make_test_worker();
+        let refresh = w.apply_adapter_pairable("hci0", true, Ok(()));
+        assert!(refresh);
+        assert!(w.event_log.front().unwrap().message.contains("Pairable on"));
+    }
+
+    #[test]
+    fn apply_adapter_pairable_off_logs() {
+        let mut w = make_test_worker();
+        let refresh = w.apply_adapter_pairable("hci0", false, Ok(()));
+        assert!(refresh);
+        assert!(w.event_log.front().unwrap().message.contains("Pairable off"));
+    }
+
+    #[test]
+    fn apply_adapter_pairable_error_returns_false() {
+        let mut w = make_test_worker();
+        let refresh = w.apply_adapter_pairable("hci0", true, Err("failed".into()));
+        assert!(!refresh);
+        assert!(w.last_error.is_some());
     }
 }

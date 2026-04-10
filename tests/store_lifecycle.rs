@@ -1,5 +1,5 @@
-use bluetooth_mapper::model::DeviceRecord;
-use bluetooth_mapper::store::Store;
+use bluetrack::model::DeviceRecord;
+use bluetrack::store::Store;
 use chrono::{TimeZone, Utc};
 
 #[test]

@@ -1,4 +1,4 @@
-use bluetooth_mapper::model::{bytes_to_hex, AppSnapshot, DeviceRecord};
+use bluetrack::model::{bytes_to_hex, AppSnapshot, DeviceRecord};
 use chrono::{TimeZone, Utc};
 
 #[test]

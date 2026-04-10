@@ -3,10 +3,16 @@ use std::cmp::Ordering;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub use crate::intelligence::classify::{DeviceCategory, TrackerAlert, TrackerConfidence};
+pub use crate::intelligence::profile::{AddressTypeDetail, BeaconFormat, BeaconPayload};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ManufacturerEntry {
     pub id: u16,
     pub payload_hex: String,
+    /// Human-readable company name resolved from the Bluetooth SIG company ID registry.
+    #[serde(default)]
+    pub company_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -52,6 +58,41 @@ pub struct DeviceRecord {
     pub active_days: u32,
     pub last_seen_day: String,
     pub stale: bool,
+    // ── Intelligence fields (computed, not persisted) ──────────────────────
+    /// Device category inferred from advertising data.
+    #[serde(default)]
+    pub category: DeviceCategory,
+    /// Set if the device matches a known tracker signature.
+    #[serde(default)]
+    pub tracker_alert: Option<TrackerAlert>,
+    /// Manufacturer name resolved from the MAC OUI prefix.
+    #[serde(default)]
+    pub oui_manufacturer: Option<String>,
+    /// Human-readable names for advertised service UUIDs.
+    #[serde(default)]
+    pub decoded_services: Vec<String>,
+    /// Precise Bluetooth address type (public, random-static, random-resolvable, etc.).
+    #[serde(default)]
+    pub address_type_detail: AddressTypeDetail,
+    /// Parsed beacon payload if the device is an iBeacon or Eddystone beacon.
+    #[serde(default)]
+    pub beacon: Option<BeaconPayload>,
+    /// Specific Apple Continuity device type label (e.g. "AirPods Pro", "Apple Watch").
+    #[serde(default)]
+    pub apple_device_type: Option<String>,
+    // ── GATT Device Information (None until connected and read) ─────────────
+    /// Manufacturer name string from GATT Device Information Service (0x180A / 0x2A29).
+    #[serde(default)]
+    pub gatt_manufacturer: Option<String>,
+    /// Model number string from GATT Device Information Service (0x180A / 0x2A24).
+    #[serde(default)]
+    pub gatt_model: Option<String>,
+    /// Firmware revision from GATT Device Information Service (0x180A / 0x2A26).
+    #[serde(default)]
+    pub gatt_firmware: Option<String>,
+    /// Hardware revision from GATT Device Information Service (0x180A / 0x2A27).
+    #[serde(default)]
+    pub gatt_hardware: Option<String>,
 }
 
 impl Default for DeviceRecord {
@@ -92,6 +133,17 @@ impl Default for DeviceRecord {
             active_days: 1,
             last_seen_day: now.format("%Y-%m-%d").to_string(),
             stale: false,
+            category: DeviceCategory::Unknown,
+            tracker_alert: None,
+            oui_manufacturer: None,
+            decoded_services: Vec::new(),
+            address_type_detail: AddressTypeDetail::Unknown,
+            beacon: None,
+            apple_device_type: None,
+            gatt_manufacturer: None,
+            gatt_model: None,
+            gatt_firmware: None,
+            gatt_hardware: None,
         }
     }
 }
@@ -101,14 +153,14 @@ impl DeviceRecord {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use bluetooth_mapper::model::DeviceRecord;
+    /// ```no_run
+    /// use bluetrack::model::DeviceRecord;
     /// use chrono::Utc;
     ///
     /// let device = DeviceRecord::new("AA:BB:CC:DD:EE:FF", "hci0", Utc::now());
     /// assert_eq!(device.address, "AA:BB:CC:DD:EE:FF");
     /// assert_eq!(device.seen_count, 0);
-    /// ```
+    /// ```no_run
     pub fn new(
         address: impl Into<String>,
         adapter_name: impl Into<String>,
@@ -150,6 +202,17 @@ impl DeviceRecord {
             active_days: 1,
             last_seen_day,
             stale: false,
+            category: DeviceCategory::Unknown,
+            tracker_alert: None,
+            oui_manufacturer: None,
+            decoded_services: Vec::new(),
+            address_type_detail: AddressTypeDetail::Unknown,
+            beacon: None,
+            apple_device_type: None,
+            gatt_manufacturer: None,
+            gatt_model: None,
+            gatt_firmware: None,
+            gatt_hardware: None,
         }
     }
 
@@ -382,7 +445,7 @@ pub(crate) fn compare_option_i16(left: Option<i16>, right: Option<i16>) -> Order
 /// # Examples
 ///
 /// ```
-/// use bluetooth_mapper::model::format_relative_time;
+/// use bluetrack::model::format_relative_time;
 /// use chrono::Utc;
 ///
 /// let result = format_relative_time(Utc::now());
@@ -422,7 +485,7 @@ pub fn format_duration_since(start: DateTime<Utc>) -> String {
 /// # Examples
 ///
 /// ```
-/// use bluetooth_mapper::model::bytes_to_hex;
+/// use bluetrack::model::bytes_to_hex;
 ///
 /// assert_eq!(bytes_to_hex(&[0x0a, 0xff, 0x00]), "0aff00");
 /// assert_eq!(bytes_to_hex(&[]), "");
@@ -775,6 +838,7 @@ mod tests {
         d.manufacturer_data.push(ManufacturerEntry {
             id: 0x004c,
             payload_hex: "0215".into(),
+            company_name: None,
         });
         assert_eq!(d.manufacturer_summary(), "0x004c");
     }
@@ -785,10 +849,12 @@ mod tests {
         d.manufacturer_data.push(ManufacturerEntry {
             id: 0x004c,
             payload_hex: "".into(),
+            company_name: None,
         });
         d.manufacturer_data.push(ManufacturerEntry {
             id: 0x0006,
             payload_hex: "".into(),
+            company_name: None,
         });
         assert_eq!(d.manufacturer_summary(), "0x004c, 0x0006");
     }

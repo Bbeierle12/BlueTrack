@@ -1,4 +1,4 @@
-use bluetooth_mapper::settings::Settings;
+use bluetrack::settings::Settings;
 use std::path::Path;
 
 #[test]

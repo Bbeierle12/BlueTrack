@@ -1,6 +1,6 @@
 [package]
-name = "bluetooth-mapper"
-version = "0.1.0"
+name = "bluetrack"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
@@ -15,7 +15,24 @@ serde_json = "1.0.149"
 tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3"
 
 [profile.test]
 opt-level = 1
+
+[profile.bench]
+opt-level = 3
+
+[[test]]
+name = "device_lifecycle"
+
+[[test]]
+name = "settings_roundtrip"
+
+[[test]]
+name = "store_lifecycle"
+
+[[bench]]
+name = "enrich"
+harness = false

@@ -263,6 +263,7 @@ mod tests {
         device.manufacturer_data.push(crate::model::ManufacturerEntry {
             id: 0x004c,
             payload_hex: "0215abcd".into(),
+            company_name: None,
         });
         device.uuids = vec!["0000180a-0000-1000-8000-00805f9b34fb".into()];
 
