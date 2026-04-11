@@ -33,19 +33,42 @@ pub enum AppAction {
     StartScan,
     StopScan,
     Refresh,
-    CaptureScan,
+    /// Begin a timed discovery cycle. The app starts the scanner if it's
+    /// not running, shows a progress bar in the scan view, and on completion
+    /// freezes the live device list into the captured list.
+    StartScanCycle,
+    /// Abort an in-progress discovery cycle without capturing results.
+    CancelScanCycle,
     OpenSettings,
     // Device management
     ConnectDevice(String),
     DisconnectDevice(String),
-    SetTrusted { address: String, trusted: bool },
-    SetBlocked { address: String, blocked: bool },
+    SetTrusted {
+        address: String,
+        trusted: bool,
+    },
+    SetBlocked {
+        address: String,
+        blocked: bool,
+    },
     ForgetDevice(String),
-    SetAlias { address: String, alias: String },
+    SetAlias {
+        address: String,
+        alias: String,
+    },
     // Adapter management
-    SetAdapterPowered { adapter: String, powered: bool },
-    SetAdapterDiscoverable { adapter: String, discoverable: bool },
-    SetAdapterPairable { adapter: String, pairable: bool },
+    SetAdapterPowered {
+        adapter: String,
+        powered: bool,
+    },
+    SetAdapterDiscoverable {
+        adapter: String,
+        discoverable: bool,
+    },
+    SetAdapterPairable {
+        adapter: String,
+        pairable: bool,
+    },
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -54,10 +77,11 @@ pub fn render(
     snapshot: &AppSnapshot,
     captured_devices: &[DeviceRecord],
     captured_at: Option<chrono::DateTime<chrono::Utc>>,
+    cycle_status: Option<(f32, f32)>,
     selected_tab: &mut ViewTab,
     scan_filter: &mut ScanFilter,
     selected_device: &mut Option<String>,
-    rename_draft: &mut Option<String>,
+    rename_draft: &mut Option<(String, String)>,
 ) -> Option<AppAction> {
     let mut action = None;
 
@@ -137,17 +161,22 @@ pub fn render(
                     }
 
                     // Start / Stop passive scan — coloured by current state so the
-                    // button also acts as a secondary status indicator.
-                    if snapshot.scan_active {
-                        if components::ghost_button(ui, "Stop scan", theme::color::STALE).clicked()
+                    // button also acts as a secondary status indicator. Disabled
+                    // during a discovery cycle to avoid surprising scanner toggles
+                    // that would be reverted on finalize.
+                    ui.add_enabled_ui(cycle_status.is_none(), |ui| {
+                        if snapshot.scan_active {
+                            if components::ghost_button(ui, "Stop scan", theme::color::STALE)
+                                .clicked()
+                            {
+                                action = Some(AppAction::StopScan);
+                            }
+                        } else if components::ghost_button(ui, "Start scan", theme::color::NEAR)
+                            .clicked()
                         {
-                            action = Some(AppAction::StopScan);
+                            action = Some(AppAction::StartScan);
                         }
-                    } else if components::ghost_button(ui, "Start scan", theme::color::NEAR)
-                        .clicked()
-                    {
-                        action = Some(AppAction::StartScan);
-                    }
+                    });
                 });
             });
         });
@@ -163,7 +192,13 @@ pub fn render(
                     .inner_margin(egui::Margin::same(theme::space::XL_I)),
             )
             .show(ctx, |ui| {
-                render_device_detail(ui, snapshot, selected_device, rename_draft)
+                render_device_detail(
+                    ui,
+                    snapshot,
+                    captured_devices,
+                    selected_device,
+                    rename_draft,
+                )
             })
             .inner
     {
@@ -182,6 +217,7 @@ pub fn render(
                     ui,
                     captured_devices,
                     captured_at,
+                    cycle_status,
                     snapshot,
                     scan_filter,
                     selected_device,
@@ -202,17 +238,20 @@ pub fn render(
     action
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_scan_view(
     ui: &mut egui::Ui,
     captured_devices: &[DeviceRecord],
     captured_at: Option<chrono::DateTime<chrono::Utc>>,
+    cycle_status: Option<(f32, f32)>,
     snapshot: &AppSnapshot,
     scan_filter: &mut ScanFilter,
     selected_device: &mut Option<String>,
 ) -> Option<AppAction> {
+    let _ = snapshot; // scan-active hint moved to the top bar; keep for future use.
     let mut action: Option<AppAction> = None;
 
-    // ── Filter bar: pills on the left, Scan button on the right ─────────────
+    // ── Filter bar: pills on the left, Scan button (or progress) on the right
     egui::Frame::new()
         .fill(theme::color::BG_PANEL)
         .stroke(egui::Stroke::new(theme::stroke::THIN, theme::color::BORDER))
@@ -238,23 +277,46 @@ fn render_scan_view(
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if components::primary_button(ui, "Scan for devices", theme::color::NEAR)
-                        .clicked()
-                    {
-                        action = Some(AppAction::CaptureScan);
-                    }
+                    if let Some((elapsed, total)) = cycle_status {
+                        // Cancel sits on the right, progress bar to its left.
+                        if components::ghost_button(ui, "Cancel", theme::color::STALE).clicked() {
+                            action = Some(AppAction::CancelScanCycle);
+                        }
+                        ui.add_space(theme::space::SM);
+                        // Guard against bad `total` values (per the resolved
+                        // PR #2 review) — NaN / zero / negative collapses to
+                        // a flat 0.0 fraction instead of producing inf/NaN.
+                        let fraction = if total.is_finite() && total > 0.0 && elapsed.is_finite() {
+                            (elapsed / total).clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        };
+                        ui.add(egui::ProgressBar::new(fraction).desired_width(220.0).text(
+                            format!(
+                                "Scanning… {} / {}",
+                                format_mmss(elapsed),
+                                format_mmss(total),
+                            ),
+                        ));
+                    } else {
+                        if components::primary_button(ui, "Scan for devices", theme::color::NEAR)
+                            .clicked()
+                        {
+                            action = Some(AppAction::StartScanCycle);
+                        }
 
-                    if let Some(ts) = captured_at {
-                        ui.add_space(theme::space::MD);
-                        ui.label(
-                            RichText::new(format!(
-                                "Captured {} · {} devices",
-                                format_relative_time(ts),
-                                captured_devices.len()
-                            ))
-                            .size(theme::text::SMALL)
-                            .color(theme::color::TEXT_FAINT),
-                        );
+                        if let Some(ts) = captured_at {
+                            ui.add_space(theme::space::MD);
+                            ui.label(
+                                RichText::new(format!(
+                                    "Captured {} · {} devices",
+                                    format_relative_time(ts),
+                                    captured_devices.len()
+                                ))
+                                .size(theme::text::SMALL)
+                                .color(theme::color::TEXT_FAINT),
+                            );
+                        }
                     }
                 });
             });
@@ -273,35 +335,40 @@ fn render_scan_view(
         .collect();
 
     if devices.is_empty() {
+        // Empty-state copy is driven by (cycle_status, captured_at,
+        // captured_devices, scan_filter) so the user sees distinct messages
+        // for "cycle running", "never scanned", "scan found nothing", and
+        // "filter hides everything".
+        let msg: &str = if cycle_status.is_some() {
+            if captured_devices.is_empty() {
+                "Discovery cycle in progress — results will appear here when the scan completes."
+            } else {
+                "Discovery cycle in progress — showing the previous capture until results are ready."
+            }
+        } else if captured_at.is_none() {
+            "No scan captured yet. Click \"Scan for devices\" to run a discovery cycle."
+        } else if captured_devices.is_empty() {
+            "Scan finished — no devices found. Click \"Scan for devices\" to try again."
+        } else {
+            match scan_filter {
+                ScanFilter::All => "No devices in the captured list.",
+                ScanFilter::Near => "No devices within the Near band.",
+                ScanFilter::Mid => "No devices within the Mid band.",
+                ScanFilter::Far => "No devices within the Far band.",
+                ScanFilter::Stale => "No stale devices.",
+            }
+        };
+
         egui::Frame::new()
             .inner_margin(egui::Margin::same(theme::space::XXL_I))
             .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(theme::space::XXL);
-                    let msg = if captured_devices.is_empty() {
-                        "No scan captured yet. Click \"Scan for devices\" to capture nearby Bluetooth devices."
-                    } else {
-                        match scan_filter {
-                            ScanFilter::All => "No devices in the captured list.",
-                            ScanFilter::Near => "No devices within the Near band.",
-                            ScanFilter::Mid => "No devices within the Mid band.",
-                            ScanFilter::Far => "No devices within the Far band.",
-                            ScanFilter::Stale => "No stale devices.",
-                        }
-                    };
                     ui.label(
                         RichText::new(msg)
                             .size(theme::text::BODY)
                             .color(theme::color::TEXT_MUTED),
                     );
-                    if !snapshot.scan_active {
-                        ui.add_space(theme::space::MD);
-                        ui.label(
-                            RichText::new("Passive scan is stopped — open Settings to start.")
-                                .size(theme::text::SMALL)
-                                .color(theme::color::STALE),
-                        );
-                    }
                 });
             });
         return action;
@@ -739,6 +806,17 @@ pub(crate) fn truncate_name(name: &str, max: usize) -> String {
     }
 }
 
+/// Format a duration in seconds as `m:ss`. Used by the discovery-cycle
+/// progress timer; negative / NaN / infinite inputs collapse to `0:00`.
+pub(crate) fn format_mmss(secs: f32) -> String {
+    let total = if secs.is_finite() && secs > 0.0 {
+        secs as u32
+    } else {
+        0
+    };
+    format!("{}:{:02}", total / 60, total % 60)
+}
+
 // Ring fractions matching proximity_band thresholds
 const RING_NEAR: f32 = 0.30;
 const RING_MID: f32 = 0.58;
@@ -1018,22 +1096,18 @@ fn render_profile_card(ui: &mut egui::Ui, device: &DeviceRecord) -> Option<Strin
 fn render_device_detail(
     ui: &mut egui::Ui,
     snapshot: &AppSnapshot,
+    captured_devices: &[DeviceRecord],
     selected_device: &mut Option<String>,
-    rename_draft: &mut Option<String>,
+    rename_draft: &mut Option<(String, String)>,
 ) -> Option<AppAction> {
     let mut action: Option<AppAction> = None;
 
-    let current = selected_device
-        .as_deref()
-        .and_then(|address| {
-            snapshot
-                .devices
-                .iter()
-                .find(|device| device.address == address)
-        })
-        .or_else(|| snapshot.devices.first());
-
-    let Some(device) = current else {
+    // Resolve the selected device. Look in the live snapshot first (so we show
+    // fresh RSSI / state), then fall back to the captured list (so the user can
+    // still inspect a device they selected from the static Scan grid even after
+    // the backend has purged it). Never silently reassign `*selected_device` —
+    // selection is user-owned.
+    let Some(selected_addr) = selected_device.as_deref().map(str::to_string) else {
         ui.add_space(theme::space::XXL);
         ui.vertical_centered(|ui| {
             ui.label(
@@ -1050,13 +1124,66 @@ fn render_device_detail(
         });
         return action;
     };
-    *selected_device = Some(device.address.clone());
+
+    let live_device = snapshot
+        .devices
+        .iter()
+        .find(|device| device.address == selected_addr);
+    let (device, is_stale_capture) = match live_device {
+        Some(device) => (device, false),
+        None => match captured_devices
+            .iter()
+            .find(|device| device.address == selected_addr)
+        {
+            Some(device) => (device, true),
+            None => {
+                // Vanished from both lists — show an explicit error rather
+                // than silently picking another device.
+                ui.add_space(theme::space::LG);
+                components::alert_banner(ui, theme::color::ERROR, |ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            RichText::new("Selected device is no longer available")
+                                .size(theme::text::BODY)
+                                .color(theme::color::ERROR)
+                                .strong(),
+                        );
+                        ui.label(
+                            RichText::new(&selected_addr)
+                                .monospace()
+                                .size(theme::text::MONO)
+                                .color(theme::color::TEXT_SECONDARY),
+                        );
+                        ui.label(
+                            RichText::new(
+                                "Purged from the live scan and not in the captured list. \
+                                 Select another device from the Scan view.",
+                            )
+                            .size(theme::text::SMALL)
+                            .color(theme::color::TEXT_MUTED),
+                        );
+                    });
+                });
+                return action;
+            }
+        },
+    };
 
     egui::ScrollArea::vertical()
         .id_salt("device_detail_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.style_mut().spacing.item_spacing.y = theme::space::LG;
+
+            if is_stale_capture {
+                components::alert_banner(ui, theme::color::STALE, |ui| {
+                    ui.label(
+                        RichText::new("Showing captured data — device is no longer live")
+                            .size(theme::text::SMALL)
+                            .color(theme::color::STALE),
+                    );
+                });
+            }
 
             // Tracker banner (conditional)
             if let Some(alert) = &device.tracker_alert {
@@ -1213,7 +1340,7 @@ fn render_detail_section_status(ui: &mut egui::Ui, device: &DeviceRecord) {
 fn render_detail_section_manage(
     ui: &mut egui::Ui,
     device: &DeviceRecord,
-    rename_draft: &mut Option<String>,
+    rename_draft: &mut Option<(String, String)>,
 ) -> Option<AppAction> {
     let mut action = None;
     let addr = device.address.clone();
@@ -1259,11 +1386,15 @@ fn render_detail_section_manage(
 
         ui.add_space(theme::space::XS);
 
-        // Forget / Rename row
+        // Rename row. The draft is scoped to a specific address so that
+        // switching selection mid-edit never lets an Apply click rename a
+        // different device with the previous draft text.
         ui.horizontal(|ui| {
-            if let Some(draft) = rename_draft.as_mut() {
+            let is_editing_this = rename_draft.as_ref().is_some_and(|(a, _)| a == &addr);
+            if is_editing_this {
+                let (_, draft_text) = rename_draft.as_mut().expect("guarded by is_editing_this");
                 let response = ui.add(
-                    egui::TextEdit::singleline(draft)
+                    egui::TextEdit::singleline(draft_text)
                         .desired_width(140.0)
                         .hint_text("Alias…"),
                 );
@@ -1272,7 +1403,7 @@ fn render_detail_section_manage(
                 if components::ghost_button(ui, "Apply", theme::color::MID).clicked() || submitted {
                     action = Some(AppAction::SetAlias {
                         address: addr.clone(),
-                        alias: draft.trim().to_string(),
+                        alias: draft_text.trim().to_string(),
                     });
                     *rename_draft = None;
                 }
@@ -1285,7 +1416,7 @@ fn render_detail_section_manage(
                     .as_deref()
                     .filter(|s| !s.is_empty())
                     .unwrap_or(device.name.as_deref().unwrap_or(""));
-                *rename_draft = Some(current.to_string());
+                *rename_draft = Some((addr.clone(), current.to_string()));
             }
         });
 

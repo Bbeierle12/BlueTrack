@@ -11,20 +11,50 @@ use crate::{
     },
 };
 
+const SCAN_CYCLE_DURATION_SECS: f32 = 10.0;
+
+/// In-progress timed discovery cycle. While a cycle is active the UI shows a
+/// progress bar in place of the "Scan for devices" button; on completion the
+/// current live snapshot is frozen into `captured_devices` and the scanner is
+/// restored to whatever state it was in before the cycle started.
+///
+/// Uses `std::time::Instant` so the timer is monotonic and immune to
+/// wall-clock adjustments (NTP, manual clock edits).
+struct ScanCycle {
+    started_at: std::time::Instant,
+    duration_secs: f32,
+    was_scanning_before: bool,
+}
+
+impl ScanCycle {
+    fn elapsed_secs(&self) -> f32 {
+        self.started_at.elapsed().as_secs_f32()
+    }
+
+    fn is_finished(&self) -> bool {
+        self.elapsed_secs() >= self.duration_secs
+    }
+}
+
 pub struct BluetoothApp {
     snapshot: AppSnapshot,
     // Frozen copy of the device list shown in the Scan tab. Only refreshed
-    // when the user clicks the Scan button, so rows don't reorder while the
+    // when a discovery cycle finishes, so rows don't reorder while the
     // live passive scan keeps feeding the Proximity Radar.
     captured_devices: Vec<DeviceRecord>,
     captured_at: Option<DateTime<Utc>>,
+    scan_cycle: Option<ScanCycle>,
     scanner: ScannerHandle,
     settings: Settings,
     selected_tab: ViewTab,
     scan_filter: ScanFilter,
     selected_device: Option<String>,
     settings_modal: Option<SettingsModal>,
-    rename_draft: Option<String>,
+    /// In-progress alias edit, scoped to the specific device address that the
+    /// user clicked "Rename" on. Pairing the address with the draft text
+    /// prevents an Apply click on a newly-selected device from renaming the
+    /// wrong device with the previous draft.
+    rename_draft: Option<(String, String)>,
 }
 
 impl BluetoothApp {
@@ -37,6 +67,7 @@ impl BluetoothApp {
             snapshot: AppSnapshot::default(),
             captured_devices: Vec::new(),
             captured_at: None,
+            scan_cycle: None,
             scanner,
             settings,
             selected_tab: ViewTab::Scan,
@@ -60,30 +91,77 @@ impl BluetoothApp {
         }
     }
 
-    fn capture_scan(&mut self) {
-        // If the passive scanner is currently off, treat the click as "start
-        // scanning" instead of "capture empty snapshot". This avoids the
-        // two-click footgun where the first click freezes an empty list and
-        // the user has to click again once results arrive.
-        if !self.snapshot.scan_active {
-            self.scanner.start_scan();
+    fn start_scan_cycle(&mut self) {
+        if self.scan_cycle.is_some() {
             return;
         }
+        let was_scanning_before = self.snapshot.scan_active;
+        if !was_scanning_before {
+            self.scanner.start_scan();
+        }
+        self.scan_cycle = Some(ScanCycle {
+            started_at: std::time::Instant::now(),
+            duration_secs: SCAN_CYCLE_DURATION_SECS,
+            was_scanning_before,
+        });
+    }
+
+    fn finalize_scan_cycle(&mut self) {
+        let Some(cycle) = self.scan_cycle.take() else {
+            return;
+        };
         self.captured_devices = self.snapshot.devices.clone();
         self.captured_at = Some(Utc::now());
+        if !cycle.was_scanning_before {
+            self.scanner.stop_scan();
+        }
+    }
+
+    fn cancel_scan_cycle(&mut self) {
+        let Some(cycle) = self.scan_cycle.take() else {
+            return;
+        };
+        if !cycle.was_scanning_before {
+            self.scanner.stop_scan();
+        }
+    }
+
+    fn scan_cycle_status(&self) -> Option<(f32, f32)> {
+        self.scan_cycle
+            .as_ref()
+            .map(|c| (c.elapsed_secs(), c.duration_secs))
     }
 }
 
 impl eframe::App for BluetoothApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_snapshot();
-        ctx.request_repaint_after(std::time::Duration::from_secs(1));
+
+        // Repaint policy: during a discovery cycle repaint every 100 ms so the
+        // progress bar advances smoothly. When the cycle finishes, fall through
+        // to the 1 s idle repaint so `captured_at` / relative times still
+        // update. Otherwise the normal 1 s idle cadence applies.
+        let mut schedule_idle_repaint = true;
+        if let Some(cycle) = self.scan_cycle.as_ref() {
+            if cycle.is_finished() {
+                self.finalize_scan_cycle();
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+                schedule_idle_repaint = false;
+            }
+        }
+        if schedule_idle_repaint {
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+
+        let cycle_status = self.scan_cycle_status();
 
         if let Some(action) = ui::render(
             ctx,
             &self.snapshot,
             &self.captured_devices,
             self.captured_at,
+            cycle_status,
             &mut self.selected_tab,
             &mut self.scan_filter,
             &mut self.selected_device,
@@ -93,7 +171,8 @@ impl eframe::App for BluetoothApp {
                 AppAction::StartScan => self.scanner.start_scan(),
                 AppAction::StopScan => self.scanner.stop_scan(),
                 AppAction::Refresh => self.scanner.refresh(),
-                AppAction::CaptureScan => self.capture_scan(),
+                AppAction::StartScanCycle => self.start_scan_cycle(),
+                AppAction::CancelScanCycle => self.cancel_scan_cycle(),
                 AppAction::OpenSettings => {
                     self.settings_modal = Some(SettingsModal::new(&self.settings));
                 }
@@ -103,7 +182,6 @@ impl eframe::App for BluetoothApp {
                     self.scanner.set_trusted(address, trusted)
                 }
                 AppAction::SetBlocked { address, blocked } => {
-                    // If we're forgetting a blocked device, clear selection
                     self.scanner.set_blocked(address, blocked)
                 }
                 AppAction::ForgetDevice(addr) => {
