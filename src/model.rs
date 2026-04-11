@@ -160,7 +160,7 @@ impl DeviceRecord {
     /// let device = DeviceRecord::new("AA:BB:CC:DD:EE:FF", "hci0", Utc::now());
     /// assert_eq!(device.address, "AA:BB:CC:DD:EE:FF");
     /// assert_eq!(device.seen_count, 0);
-    /// ```no_run
+    /// ```
     pub fn new(
         address: impl Into<String>,
         adapter_name: impl Into<String>,

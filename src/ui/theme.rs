@@ -207,7 +207,9 @@ pub fn tracker_confidence_color(_c: &TrackerConfidence) -> Color32 {
 /// Approximate distance in meters from an RSSI sample using the free-space
 /// path loss model:
 ///
-///     d = 10 ^ ((tx_ref - rssi) / (10 * n))
+/// ```text
+/// d = 10 ^ ((tx_ref - rssi) / (10 * n))
+/// ```
 ///
 /// with a 1 m BLE reference power of `-59 dBm` and path-loss exponent `n = 2.0`.
 ///
