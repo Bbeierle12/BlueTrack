@@ -50,7 +50,11 @@ pub struct BluetoothApp {
     scan_filter: ScanFilter,
     selected_device: Option<String>,
     settings_modal: Option<SettingsModal>,
-    rename_draft: Option<String>,
+    /// In-progress alias edit, scoped to the specific device address that the
+    /// user clicked "Rename" on. Pairing the address with the draft text
+    /// prevents an Apply click on a newly-selected device from renaming the
+    /// wrong device with the previous draft.
+    rename_draft: Option<(String, String)>,
 }
 
 impl BluetoothApp {

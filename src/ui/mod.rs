@@ -81,7 +81,7 @@ pub fn render(
     selected_tab: &mut ViewTab,
     scan_filter: &mut ScanFilter,
     selected_device: &mut Option<String>,
-    rename_draft: &mut Option<String>,
+    rename_draft: &mut Option<(String, String)>,
 ) -> Option<AppAction> {
     let mut action = None;
 
@@ -1098,7 +1098,7 @@ fn render_device_detail(
     snapshot: &AppSnapshot,
     captured_devices: &[DeviceRecord],
     selected_device: &mut Option<String>,
-    rename_draft: &mut Option<String>,
+    rename_draft: &mut Option<(String, String)>,
 ) -> Option<AppAction> {
     let mut action: Option<AppAction> = None;
 
@@ -1340,7 +1340,7 @@ fn render_detail_section_status(ui: &mut egui::Ui, device: &DeviceRecord) {
 fn render_detail_section_manage(
     ui: &mut egui::Ui,
     device: &DeviceRecord,
-    rename_draft: &mut Option<String>,
+    rename_draft: &mut Option<(String, String)>,
 ) -> Option<AppAction> {
     let mut action = None;
     let addr = device.address.clone();
@@ -1386,11 +1386,15 @@ fn render_detail_section_manage(
 
         ui.add_space(theme::space::XS);
 
-        // Forget / Rename row
+        // Rename row. The draft is scoped to a specific address so that
+        // switching selection mid-edit never lets an Apply click rename a
+        // different device with the previous draft text.
         ui.horizontal(|ui| {
-            if let Some(draft) = rename_draft.as_mut() {
+            let is_editing_this = rename_draft.as_ref().is_some_and(|(a, _)| a == &addr);
+            if is_editing_this {
+                let (_, draft_text) = rename_draft.as_mut().expect("guarded by is_editing_this");
                 let response = ui.add(
-                    egui::TextEdit::singleline(draft)
+                    egui::TextEdit::singleline(draft_text)
                         .desired_width(140.0)
                         .hint_text("Alias…"),
                 );
@@ -1399,7 +1403,7 @@ fn render_detail_section_manage(
                 if components::ghost_button(ui, "Apply", theme::color::MID).clicked() || submitted {
                     action = Some(AppAction::SetAlias {
                         address: addr.clone(),
-                        alias: draft.trim().to_string(),
+                        alias: draft_text.trim().to_string(),
                     });
                     *rename_draft = None;
                 }
@@ -1412,7 +1416,7 @@ fn render_detail_section_manage(
                     .as_deref()
                     .filter(|s| !s.is_empty())
                     .unwrap_or(device.name.as_deref().unwrap_or(""));
-                *rename_draft = Some(current.to_string());
+                *rename_draft = Some((addr.clone(), current.to_string()));
             }
         });
 
