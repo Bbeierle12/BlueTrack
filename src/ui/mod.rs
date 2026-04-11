@@ -156,8 +156,8 @@ pub fn render(
         });
 
     // Device detail panel only shown on Scan and Radar views
-    if *selected_tab == ViewTab::Scan || *selected_tab == ViewTab::Radar {
-        if let Some(device_action) = egui::SidePanel::right("device_detail")
+    if matches!(*selected_tab, ViewTab::Scan | ViewTab::Radar) && let Some(device_action) =
+        egui::SidePanel::right("device_detail")
             .min_width(320.0)
             .frame(
                 egui::Frame::new()
@@ -169,9 +169,8 @@ pub fn render(
                 render_device_detail(ui, snapshot, selected_device, rename_draft)
             })
             .inner
-        {
-            action = Some(device_action);
-        }
+    {
+        action = Some(device_action);
     }
 
     egui::CentralPanel::default()
@@ -903,7 +902,7 @@ fn render_profiles_view(
                         .then_with(|| a.address.cmp(&b.address))
                 }),
                 ProfileSort::Name => {
-                    devices.sort_by(|a, b| a.display_name().cmp(&b.display_name()))
+                    devices.sort_by(|a, b| a.display_name().cmp(b.display_name()))
                 }
                 ProfileSort::LastSeen => devices.sort_by(|a, b| b.last_seen.cmp(&a.last_seen)),
                 ProfileSort::Rssi => devices.sort_by(|a, b| {
