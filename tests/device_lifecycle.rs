@@ -12,25 +12,28 @@ fn device_discover_advertise_stale_cycle() {
     assert_eq!(device.recurrence_label(), "Transient");
 
     device.note_advertisement(t0, Some(-55));
+    device.estimated_distance = Some(0.5); // simulates distance pipeline
     assert_eq!(device.proximity_band(), "Near");
     assert_eq!(device.seen_count, 1);
 
     device.note_advertisement(t1, Some(-65));
+    device.estimated_distance = Some(2.0);
     assert_eq!(device.seen_count, 2);
     assert_eq!(device.active_days, 1);
 
     device.note_advertisement(t2, Some(-70));
+    device.estimated_distance = Some(3.0);
     assert_eq!(device.active_days, 2);
     assert_eq!(device.recurrence_label(), "Recurring");
 
     device.mark_stale();
     assert!(device.stale);
     assert!(device.rssi.is_none());
-    // avg_rssi still exists from prior advertisements, so proximity_band
-    // falls back to average (-63 dBm) → "Mid", not "Stale"
+    // After mark_stale, estimated_distance is still set from the last pipeline run
     assert_eq!(device.proximity_band(), "Mid");
 
     device.note_advertisement(t2, Some(-60));
+    device.estimated_distance = Some(1.5);
     assert!(!device.stale);
     assert_eq!(device.proximity_band(), "Mid");
 }

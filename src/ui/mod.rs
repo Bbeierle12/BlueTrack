@@ -69,6 +69,7 @@ pub enum AppAction {
         adapter: String,
         pairable: bool,
     },
+    PingDevice(String),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -454,8 +455,11 @@ fn render_scan_view(
                         components::rssi_meter(&mut cols[2], device.rssi, band_color);
 
                         // Distance column
-                        let dist_text = theme::format_distance(device.rssi);
-                        let dist_color = if device.rssi.is_some() {
+                        let dist_text = crate::distance::format_distance(
+                            device.estimated_distance,
+                            device.distance_confidence,
+                        );
+                        let dist_color = if device.estimated_distance.is_some() {
                             theme::color::TEXT_SECONDARY
                         } else {
                             theme::color::TEXT_FAINT
@@ -574,11 +578,11 @@ fn render_radar_canvas(
         egui::Stroke::new(theme::stroke::THIN, grid_color),
     );
 
-    // Band rings with dBm thresholds
+    // Band rings with distance thresholds
     let rings: &[(f32, &str, egui::Color32)] = &[
-        (RING_NEAR, "-58 dBm", theme::color::NEAR),
-        (RING_MID, "-74 dBm", theme::color::MID),
-        (RING_FAR, "-100 dBm", theme::color::FAR),
+        (RING_NEAR, "1 m", theme::color::NEAR),
+        (RING_MID, "4 m", theme::color::MID),
+        (RING_FAR, "30 m", theme::color::FAR),
     ];
     for &(fraction, db_label, tint) in rings.iter().rev() {
         let r = radius * fraction;
@@ -666,7 +670,11 @@ fn render_radar_canvas(
             } else {
                 base_dot
             };
-            let alpha = if is_stale { 0.45 } else { 0.85 };
+            let alpha = if is_stale {
+                0.45
+            } else {
+                crate::distance::dot_alpha(device.distance_confidence).max(0.15)
+            };
 
             // Filled dot
             painter.circle_filled(dot_pos, dot_radius, tint.gamma_multiply(alpha));
@@ -817,23 +825,15 @@ pub(crate) fn format_mmss(secs: f32) -> String {
     format!("{}:{:02}", total / 60, total % 60)
 }
 
-// Ring fractions matching proximity_band thresholds
-const RING_NEAR: f32 = 0.30;
-const RING_MID: f32 = 0.58;
+// Ring fractions derived from log-distance radar mapping (see distance.rs)
+const RING_NEAR: f32 = 0.404;
+const RING_MID: f32 = 0.647;
 const RING_FAR: f32 = 1.00;
 
-/// Map a device's RSSI to a 0.0..1.0 fraction where 0 = center, 1 = edge.
+/// Map a device to a 0.0..1.0 radar fraction using the distance pipeline.
 pub(crate) fn rssi_to_fraction(device: &DeviceRecord) -> f32 {
-    let rssi = device
-        .rssi
-        .or_else(|| device.avg_rssi().map(|v| v.round() as i16));
-
-    match rssi {
-        Some(value) => {
-            // Clamp to -100..0 range, map linearly: 0 dBm = center, -100 = edge
-            let clamped = (value as f32).clamp(-100.0, 0.0);
-            (-clamped) / 100.0
-        }
+    match device.estimated_distance {
+        Some(_) => device.radar_fraction,
         None if device.stale => 0.92,
         None => 0.80,
     }
@@ -1382,7 +1382,40 @@ fn render_detail_section_manage(
                     blocked: block_action_blocked,
                 });
             }
+
+            // Ping
+            if components::ghost_button(ui, "Ping", theme::color::ACCENT).clicked() {
+                action = Some(AppAction::PingDevice(addr.clone()));
+            }
         });
+
+        // Last ping result
+        if let Some(ping) = &device.last_ping {
+            ui.add_space(theme::space::XS);
+            let (ping_text, ping_color) = if ping.success {
+                (
+                    format!("✓ {}ms", ping.latency_ms),
+                    theme::color::NEAR,
+                )
+            } else {
+                (
+                    format!("✗ {}", ping.message),
+                    theme::color::ERROR,
+                )
+            };
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("Last ping")
+                        .size(theme::text::SMALL)
+                        .color(theme::color::TEXT_DIM),
+                );
+                ui.label(
+                    RichText::new(ping_text)
+                        .size(theme::text::SMALL)
+                        .color(ping_color),
+                );
+            });
+        }
 
         ui.add_space(theme::space::XS);
 
@@ -1444,7 +1477,14 @@ fn render_detail_section_signal(ui: &mut egui::Ui, device: &DeviceRecord) {
         if let Some(tx) = device.tx_power {
             components::kv_row(ui, "TX Power", format!("{tx} dBm"));
         }
-        components::kv_row(ui, "Distance", theme::format_distance(device.rssi));
+        components::kv_row(
+            ui,
+            "Distance",
+            crate::distance::format_distance(
+                device.estimated_distance,
+                device.distance_confidence,
+            ),
+        );
         components::kv_row_colored(
             ui,
             "Band",
@@ -1871,40 +1911,27 @@ mod tests {
     // ── rssi_to_fraction ────────────────────────────────────────────
 
     #[test]
-    fn rssi_to_fraction_zero_dbm() {
+    fn rssi_to_fraction_returns_radar_fraction() {
         let mut d = make_device("AA:00:00:00:00:01");
-        d.rssi = Some(0);
-        assert!((rssi_to_fraction(&d) - 0.0).abs() < 0.01);
+        d.estimated_distance = Some(2.0);
+        d.radar_fraction = 0.45;
+        assert!((rssi_to_fraction(&d) - 0.45).abs() < 0.001);
     }
 
     #[test]
-    fn rssi_to_fraction_minus_100() {
+    fn rssi_to_fraction_near_device() {
         let mut d = make_device("AA:00:00:00:00:01");
-        d.rssi = Some(-100);
-        assert!((rssi_to_fraction(&d) - 1.0).abs() < 0.01);
+        d.estimated_distance = Some(0.5);
+        d.radar_fraction = 0.12;
+        assert!((rssi_to_fraction(&d) - 0.12).abs() < 0.001);
     }
 
     #[test]
-    fn rssi_to_fraction_minus_50() {
+    fn rssi_to_fraction_far_device() {
         let mut d = make_device("AA:00:00:00:00:01");
-        d.rssi = Some(-50);
-        assert!((rssi_to_fraction(&d) - 0.5).abs() < 0.01);
-    }
-
-    #[test]
-    fn rssi_to_fraction_clamped_below_minus_100() {
-        let mut d = make_device("AA:00:00:00:00:01");
-        d.rssi = Some(-120);
-        // Should clamp to -100, so fraction = 1.0
-        assert!((rssi_to_fraction(&d) - 1.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn rssi_to_fraction_clamped_above_zero() {
-        let mut d = make_device("AA:00:00:00:00:01");
-        d.rssi = Some(10);
-        // Should clamp to 0, so fraction = 0.0
-        assert!((rssi_to_fraction(&d) - 0.0).abs() < 0.01);
+        d.estimated_distance = Some(25.0);
+        d.radar_fraction = 0.97;
+        assert!((rssi_to_fraction(&d) - 0.97).abs() < 0.001);
     }
 
     #[test]
@@ -1920,37 +1947,26 @@ mod tests {
         assert!((rssi_to_fraction(&d) - 0.80).abs() < 0.01);
     }
 
-    #[test]
-    fn rssi_to_fraction_falls_back_to_avg() {
-        let mut d = make_device("AA:00:00:00:00:01");
-        d.rssi = None;
-        d.rssi_sum = -50;
-        d.rssi_sum_squares = 2500.0;
-        d.rssi_samples = 1;
-        // avg_rssi = -50, fraction = 0.5
-        assert!((rssi_to_fraction(&d) - 0.5).abs() < 0.01);
-    }
-
     // ── band_color ──────────────────────────────────────────────────
 
     #[test]
     fn band_color_near() {
         let mut d = make_device("AA:00:00:00:00:01");
-        d.rssi = Some(-50);
+        d.estimated_distance = Some(0.5);
         assert_eq!(band_color(&d), theme::color::NEAR);
     }
 
     #[test]
     fn band_color_mid() {
         let mut d = make_device("AA:00:00:00:00:01");
-        d.rssi = Some(-65);
+        d.estimated_distance = Some(2.5);
         assert_eq!(band_color(&d), theme::color::MID);
     }
 
     #[test]
     fn band_color_far() {
         let mut d = make_device("AA:00:00:00:00:01");
-        d.rssi = Some(-80);
+        d.estimated_distance = Some(10.0);
         assert_eq!(band_color(&d), theme::color::FAR);
     }
 
@@ -1989,8 +2005,10 @@ mod tests {
     fn rssi_to_fraction_increases_with_distance() {
         let mut close = make_device("AA:00:00:00:00:01");
         let mut far = make_device("AA:00:00:00:00:02");
-        close.rssi = Some(-30);
-        far.rssi = Some(-80);
+        close.estimated_distance = Some(1.0);
+        close.radar_fraction = 0.20;
+        far.estimated_distance = Some(20.0);
+        far.radar_fraction = 0.90;
         assert!(rssi_to_fraction(&close) < rssi_to_fraction(&far));
     }
 

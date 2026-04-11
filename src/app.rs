@@ -205,6 +205,7 @@ impl eframe::App for BluetoothApp {
                 AppAction::SetAdapterPairable { adapter, pairable } => {
                     self.scanner.set_adapter_pairable(adapter, pairable);
                 }
+                AppAction::PingDevice(addr) => self.scanner.ping_device(addr),
             }
         }
 

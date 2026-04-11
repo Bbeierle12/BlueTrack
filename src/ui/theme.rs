@@ -201,47 +201,6 @@ pub fn tracker_confidence_color(_c: &TrackerConfidence) -> Color32 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RSSI → distance
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Approximate distance in meters from an RSSI sample using the free-space
-/// path loss model:
-///
-/// ```text
-/// d = 10 ^ ((tx_ref - rssi) / (10 * n))
-/// ```
-///
-/// with a 1 m BLE reference power of `-59 dBm` and path-loss exponent `n = 2.0`.
-///
-/// This is a rough estimate — real-world accuracy is ±1–3 m outdoors and can
-/// be much worse indoors or through obstacles. The result is clamped to a
-/// sensible `[0.1, 100.0]` range. Intended only for display labels and not
-/// for any safety-critical logic.
-pub fn rssi_to_distance_meters(rssi: i16) -> f32 {
-    const TX_REF_DBM: f32 = -59.0;
-    const PATH_LOSS_N: f32 = 2.0;
-
-    let ratio = (TX_REF_DBM - rssi as f32) / (10.0 * PATH_LOSS_N);
-    let meters = 10f32.powf(ratio);
-    meters.clamp(0.1, 100.0)
-}
-
-/// Short human-readable distance string: `"1.2m"`, `"12m"`, `"—"` for None.
-pub fn format_distance(rssi: Option<i16>) -> String {
-    match rssi {
-        Some(value) => {
-            let m = rssi_to_distance_meters(value);
-            if m < 10.0 {
-                format!("{m:.1}m")
-            } else {
-                format!("{:.0}m", m.round())
-            }
-        }
-        None => "—".to_string(),
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -276,23 +235,5 @@ mod tests {
         assert_eq!(proximity_band_color("Far"), color::FAR);
         assert_eq!(proximity_band_color("Stale"), color::STALE);
         assert_eq!(proximity_band_color("Unknown"), color::TEXT_MUTED);
-    }
-
-    #[test]
-    fn rssi_to_distance_monotonic_and_clamped() {
-        // Stronger signal → shorter distance.
-        assert!(rssi_to_distance_meters(-40) < rssi_to_distance_meters(-70));
-        // Reference signal → 1 m.
-        let near_ref = rssi_to_distance_meters(-59);
-        assert!((near_ref - 1.0).abs() < 0.05);
-        // Extreme values are clamped.
-        assert!(rssi_to_distance_meters(-150) <= 100.0);
-        assert!(rssi_to_distance_meters(0) >= 0.1);
-    }
-
-    #[test]
-    fn format_distance_handles_none() {
-        assert_eq!(format_distance(None), "—");
-        assert!(format_distance(Some(-59)).ends_with('m'));
     }
 }

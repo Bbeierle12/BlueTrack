@@ -138,7 +138,7 @@ pub fn parse_beacon(record: &DeviceRecord) -> Option<BeaconPayload> {
     None
 }
 
-fn parse_ibeacon(payload_hex: &str, rssi: Option<i16>) -> Option<BeaconPayload> {
+fn parse_ibeacon(payload_hex: &str, _rssi: Option<i16>) -> Option<BeaconPayload> {
     let bytes = parse_hex_pairs(payload_hex);
     // iBeacon format: [type=0x02] [length=0x15] [UUID 16 bytes] [major 2] [minor 2] [tx_power 1]
     // Total: 21 bytes of meaningful data after the type+length prefix
@@ -174,14 +174,13 @@ fn parse_ibeacon(payload_hex: &str, rssi: Option<i16>) -> Option<BeaconPayload> 
     let major = u16::from_be_bytes([bytes[18], bytes[19]]);
     let minor = u16::from_be_bytes([bytes[20], bytes[21]]);
     let tx_power = bytes[22] as i8;
-    let distance = estimate_distance(tx_power, rssi);
     Some(BeaconPayload {
         format: BeaconFormat::IBeacon,
         uuid: Some(uuid),
         major: Some(major),
         minor: Some(minor),
         calibrated_power_dbm: Some(tx_power),
-        estimated_distance_m: distance,
+        estimated_distance_m: None,
         namespace: None,
         instance: None,
         url: None,
@@ -190,7 +189,7 @@ fn parse_ibeacon(payload_hex: &str, rssi: Option<i16>) -> Option<BeaconPayload> 
     })
 }
 
-fn parse_altbeacon(payload_hex: &str, company_id: u16, rssi: Option<i16>) -> Option<BeaconPayload> {
+fn parse_altbeacon(payload_hex: &str, company_id: u16, _rssi: Option<i16>) -> Option<BeaconPayload> {
     let bytes = parse_hex_pairs(payload_hex);
     // AltBeacon: [BEACON_CODE=0xBEAC 2 bytes] [BEACON_ID 20 bytes] [reserved] [tx_power]
     if bytes.len() < 24 {
@@ -223,7 +222,6 @@ fn parse_altbeacon(payload_hex: &str, company_id: u16, rssi: Option<i16>) -> Opt
     let major = u16::from_be_bytes([bytes[18], bytes[19]]);
     let minor = u16::from_be_bytes([bytes[20], bytes[21]]);
     let tx_power = bytes[23] as i8;
-    let distance = estimate_distance(tx_power, rssi);
     let _ = company_id; // captured in struct context via manufacturer_data
     Some(BeaconPayload {
         format: BeaconFormat::AltBeacon,
@@ -231,7 +229,7 @@ fn parse_altbeacon(payload_hex: &str, company_id: u16, rssi: Option<i16>) -> Opt
         major: Some(major),
         minor: Some(minor),
         calibrated_power_dbm: Some(tx_power),
-        estimated_distance_m: distance,
+        estimated_distance_m: None,
         namespace: None,
         instance: None,
         url: None,
@@ -266,7 +264,7 @@ fn parse_eddystone(payload_hex: &str, rssi: Option<i16>) -> Option<BeaconPayload
     }
 }
 
-fn parse_eddystone_uid(bytes: &[u8], rssi: Option<i16>) -> Option<BeaconPayload> {
+fn parse_eddystone_uid(bytes: &[u8], _rssi: Option<i16>) -> Option<BeaconPayload> {
     // [frame=0x00] [tx_power] [namespace 10 bytes] [instance 6 bytes] [rfu 2 bytes]
     if bytes.len() < 18 {
         return None;
@@ -286,7 +284,7 @@ fn parse_eddystone_uid(bytes: &[u8], rssi: Option<i16>) -> Option<BeaconPayload>
         major: None,
         minor: None,
         calibrated_power_dbm: Some(tx_power),
-        estimated_distance_m: estimate_distance(tx_power, rssi),
+        estimated_distance_m: None,
         namespace: Some(namespace),
         instance: Some(instance),
         url: None,
@@ -295,7 +293,7 @@ fn parse_eddystone_uid(bytes: &[u8], rssi: Option<i16>) -> Option<BeaconPayload>
     })
 }
 
-fn parse_eddystone_url(bytes: &[u8], rssi: Option<i16>) -> Option<BeaconPayload> {
+fn parse_eddystone_url(bytes: &[u8], _rssi: Option<i16>) -> Option<BeaconPayload> {
     // [frame=0x10] [tx_power] [url_scheme] [encoded_url...]
     if bytes.len() < 3 {
         return None;
@@ -339,7 +337,7 @@ fn parse_eddystone_url(bytes: &[u8], rssi: Option<i16>) -> Option<BeaconPayload>
         major: None,
         minor: None,
         calibrated_power_dbm: Some(tx_power),
-        estimated_distance_m: estimate_distance(tx_power, rssi),
+        estimated_distance_m: None,
         namespace: None,
         instance: None,
         url: Some(url),
@@ -372,15 +370,6 @@ fn parse_eddystone_tlm(bytes: &[u8]) -> Option<BeaconPayload> {
     })
 }
 
-/// Estimate distance in metres from calibrated TX power and observed RSSI.
-/// Uses the log-distance path loss model with n=2 (free-space).
-fn estimate_distance(calibrated_power_dbm: i8, rssi: Option<i16>) -> Option<f32> {
-    let rssi = rssi?;
-    let ratio = (calibrated_power_dbm as f32 - rssi as f32) / 20.0;
-    let distance = 10f32.powf(ratio);
-    // Clamp to a sane range (1 cm – 100 m)
-    Some(distance.clamp(0.01, 100.0))
-}
 
 // ── Apple Continuity payload decoding ───────────────────────────────────────
 
@@ -556,7 +545,7 @@ mod tests {
         assert_eq!(beacon.minor, Some(2));
         assert!(beacon.uuid.is_some());
         assert!(beacon.calibrated_power_dbm.is_some());
-        assert!(beacon.estimated_distance_m.is_some());
+        assert!(beacon.estimated_distance_m.is_none()); // distance now computed by unified pipeline
     }
 
     #[test]
@@ -689,21 +678,5 @@ mod tests {
         let interval = estimate_adv_interval_ms(&d).unwrap();
         // 30000ms / 15 = 2000ms
         assert_eq!(interval, 2000);
-    }
-
-    // ── Distance estimation ───────────────────────────────────────────
-
-    #[test]
-    fn distance_at_calibration_point_is_one_metre() {
-        // When RSSI == calibrated TX power, distance should be 1.0m
-        let d = estimate_distance(-59, Some(-59)).unwrap();
-        assert!((d - 1.0).abs() < 0.01, "expected ~1.0m, got {d}");
-    }
-
-    #[test]
-    fn distance_increases_with_lower_rssi() {
-        let near = estimate_distance(-59, Some(-59)).unwrap();
-        let far = estimate_distance(-59, Some(-79)).unwrap();
-        assert!(far > near);
     }
 }

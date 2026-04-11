@@ -309,6 +309,7 @@ mod tests {
         let mut device = make_device("AA:BB:CC:DD:EE:FF");
         device.name = Some("TestDev".into());
         device.rssi = Some(-55);
+        device.estimated_distance = Some(0.5);
         let now = fixed_time();
         store.insert_sighting(&device, now).unwrap();
 
@@ -323,7 +324,7 @@ mod tests {
         assert_eq!(addr, "AA:BB:CC:DD:EE:FF");
         assert_eq!(name.as_deref(), Some("TestDev"));
         assert_eq!(rssi, Some(-55));
-        assert_eq!(band, "Near"); // -55 >= -58
+        assert_eq!(band, "Near"); // 0.5m < 1.0m threshold
     }
 
     // ── prune_old_sightings ─────────────────────────────────────────

@@ -194,6 +194,46 @@ impl SettingsModal {
         components::hairline(ui);
 
         ui.label(
+            RichText::new("Distance Estimation")
+                .size(theme::text::SUBHEADING)
+                .color(theme::color::TEXT_PRIMARY)
+                .strong(),
+        );
+        ui.add_space(theme::space::MD);
+
+        egui::Grid::new("distance_grid")
+            .num_columns(2)
+            .spacing([theme::space::XL, theme::space::MD])
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new("Environment factor (n)")
+                        .size(theme::text::BODY)
+                        .color(theme::color::TEXT_DIM),
+                );
+                ui.add(
+                    egui::Slider::new(&mut self.draft.path_loss_n, 1.8..=5.0)
+                        .step_by(0.1),
+                );
+                ui.end_row();
+
+                ui.label(
+                    RichText::new("Default TX ref")
+                        .size(theme::text::BODY)
+                        .color(theme::color::TEXT_DIM),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut self.draft.default_tx_ref)
+                        .range(-80.0..=-30.0)
+                        .suffix(" dBm")
+                        .speed(0.5),
+                );
+                ui.end_row();
+            });
+
+        ui.add_space(theme::space::LG);
+        components::hairline(ui);
+
+        ui.label(
             RichText::new("Paths")
                 .size(theme::text::SUBHEADING)
                 .color(theme::color::TEXT_PRIMARY)

@@ -121,6 +121,10 @@ impl ScannerHandle {
             .commands
             .send(WorkerCommand::SetAdapterPairable(adapter, pairable));
     }
+
+    pub fn ping_device(&self, address: String) {
+        let _ = self.commands.send(WorkerCommand::PingDevice(address));
+    }
 }
 
 enum WorkerCommand {
@@ -139,6 +143,8 @@ enum WorkerCommand {
     SetAdapterPowered(String, bool),
     SetAdapterDiscoverable(String, bool),
     SetAdapterPairable(String, bool),
+    // Ping
+    PingDevice(String),
 }
 
 enum InternalEvent {
@@ -281,6 +287,7 @@ impl Worker {
                         WorkerCommand::SetAdapterPowered(name, v) => self.cmd_adapter_powered(&name, v).await,
                         WorkerCommand::SetAdapterDiscoverable(name, v) => self.cmd_adapter_discoverable(&name, v).await,
                         WorkerCommand::SetAdapterPairable(name, v) => self.cmd_adapter_pairable(&name, v).await,
+                        WorkerCommand::PingDevice(addr) => self.cmd_ping(&addr).await,
                     }
                 }
                 Some(event) = self.internal_rx.recv() => {
@@ -582,6 +589,49 @@ impl Worker {
         record.note_advertisement(now, current_rssi);
         intelligence::enrich(record);
 
+        // ── Distance estimation pipeline ──────────────────────────────
+        if let Some(rssi_val) = current_rssi {
+            use crate::distance::{self, BeaconType};
+
+            let now_instant = std::time::Instant::now();
+            let smoothed = distance::smooth_rssi(&mut record.rssi_filter, rssi_val, now_instant);
+
+            // Resolve beacon type and calibrated power
+            let (beacon_type, beacon_cal) = match &record.beacon {
+                Some(b) => {
+                    let bt = match b.format {
+                        crate::model::BeaconFormat::IBeacon => BeaconType::IBeacon,
+                        crate::model::BeaconFormat::AltBeacon => BeaconType::AltBeacon,
+                        crate::model::BeaconFormat::EddystoneUID => BeaconType::EddystoneUid,
+                        _ => BeaconType::None,
+                    };
+                    (bt, b.calibrated_power_dbm)
+                }
+                None => (BeaconType::None, None),
+            };
+
+            let (p_tx, tx_source) = distance::resolve_tx_ref(
+                beacon_cal,
+                beacon_type,
+                record.tx_power,
+                self.settings.default_tx_ref,
+            );
+
+            let dist = distance::estimate_distance(smoothed, p_tx, self.settings.path_loss_n);
+            let fraction = distance::distance_to_radar_fraction(dist);
+            let confidence = distance::compute_confidence(
+                record.rssi_samples,
+                record.rssi_std_dev(),
+                tx_source,
+                0.0, // just received an advertisement
+            );
+
+            record.estimated_distance = Some(dist);
+            record.radar_fraction = fraction;
+            record.distance_confidence = confidence;
+            record.distance_tx_source = Some(tx_source);
+        }
+
         let is_public = record.is_public_address();
 
         // Collect values we need before releasing the borrow on self.devices
@@ -801,6 +851,134 @@ impl Worker {
             self.refresh_adapters().await;
         }
         self.emit_snapshot();
+    }
+
+    // ── Ping handler ─────────────────────────────────────────────────────────
+
+    async fn cmd_ping(&mut self, address: &str) {
+        use crate::model::PingResult;
+
+        /// Immediate Alert Service UUID (0x1802).
+        const IAS_UUID: uuid::Uuid = uuid::Uuid::from_u128(0x00001802_0000_1000_8000_00805f9b34fb);
+        /// Alert Level characteristic UUID (0x2A06).
+        const ALERT_LEVEL_UUID: uuid::Uuid =
+            uuid::Uuid::from_u128(0x00002A06_0000_1000_8000_00805f9b34fb);
+        /// High alert — causes the device to sound/vibrate.
+        const ALERT_HIGH: &[u8] = &[0x02];
+
+        self.log(LogLevel::Info, format!("Pinging {address}…"));
+        self.emit_snapshot();
+
+        let start = std::time::Instant::now();
+        let was_connected = self
+            .devices
+            .get(address)
+            .map(|d| d.connected)
+            .unwrap_or(false);
+
+        let result = match self.get_device(address).await {
+            Ok(device) => {
+                // Ensure we're connected.
+                let connect_result = if was_connected {
+                    Ok(())
+                } else {
+                    tokio::time::timeout(Duration::from_secs(10), device.connect())
+                        .await
+                        .map_err(|_| "Connect timed out (10 s)".to_string())
+                        .and_then(|r| r.map_err(|e| format!("Connect failed: {e}")))
+                };
+
+                match connect_result {
+                    Ok(()) => {
+                        // Wait briefly for services to resolve after connection.
+                        if !was_connected {
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                        }
+
+                        // Try to trigger Immediate Alert Service (audible ping).
+                        let alert_sent = self.try_immediate_alert(
+                            &device, IAS_UUID, ALERT_LEVEL_UUID, ALERT_HIGH,
+                        ).await;
+
+                        // Disconnect if we initiated the connection.
+                        if !was_connected {
+                            let _ = device.disconnect().await;
+                        }
+
+                        if alert_sent {
+                            Ok("alert sent via Immediate Alert Service")
+                        } else {
+                            Ok("device reachable but does not support Immediate Alert Service")
+                        }
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            Err(e) => Err(e),
+        };
+
+        let elapsed = start.elapsed();
+        let ping = match result {
+            Ok(detail) => {
+                let msg = format!(
+                    "Ping {address}: {detail} ({:.0} ms{})",
+                    elapsed.as_secs_f64() * 1000.0,
+                    if was_connected { ", already connected" } else { "" }
+                );
+                self.log(LogLevel::Info, &msg);
+                PingResult {
+                    success: true,
+                    latency_ms: elapsed.as_millis() as u64,
+                    message: msg,
+                    timestamp: Utc::now(),
+                }
+            }
+            Err(e) => {
+                let msg = format!("Ping {address}: {e}");
+                self.log(LogLevel::Warn, &msg);
+                PingResult {
+                    success: false,
+                    latency_ms: elapsed.as_millis() as u64,
+                    message: msg,
+                    timestamp: Utc::now(),
+                }
+            }
+        };
+
+        if let Some(record) = self.devices.get_mut(address) {
+            record.last_ping = Some(ping);
+        }
+        self.emit_snapshot();
+    }
+
+    /// Attempt to write a high-alert level to the Immediate Alert Service
+    /// on the device. Returns `true` if the write succeeded.
+    async fn try_immediate_alert(
+        &self,
+        device: &bluer::Device,
+        ias_uuid: uuid::Uuid,
+        alert_char_uuid: uuid::Uuid,
+        alert_value: &[u8],
+    ) -> bool {
+        let services = match device.services().await {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        for service in services {
+            if service.uuid().await.ok() != Some(ias_uuid) {
+                continue;
+            }
+            let chars = match service.characteristics().await {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            for ch in chars {
+                if ch.uuid().await.ok() == Some(alert_char_uuid) {
+                    return ch.write(alert_value).await.is_ok();
+                }
+            }
+        }
+        false
     }
 
     // ── Pure result-application helpers (testable without BlueZ) ────────────

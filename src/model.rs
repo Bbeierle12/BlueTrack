@@ -3,6 +3,7 @@ use std::cmp::Ordering;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+pub use crate::distance::{RssiFilter, TxSource};
 pub use crate::intelligence::classify::{DeviceCategory, TrackerAlert, TrackerConfidence};
 pub use crate::intelligence::profile::{AddressTypeDetail, BeaconFormat, BeaconPayload};
 
@@ -19,6 +20,14 @@ pub struct ManufacturerEntry {
 pub struct ServiceDataEntry {
     pub uuid: String,
     pub payload_hex: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PingResult {
+    pub success: bool,
+    pub latency_ms: u64,
+    pub message: String,
+    pub timestamp: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +102,24 @@ pub struct DeviceRecord {
     /// Hardware revision from GATT Device Information Service (0x180A / 0x2A27).
     #[serde(default)]
     pub gatt_hardware: Option<String>,
+    // ── Ping result (transient, not persisted) ────────────────────────────
+    #[serde(skip)]
+    pub last_ping: Option<PingResult>,
+    // ── Distance estimation (transient, not persisted) ─────────────────────
+    #[serde(skip)]
+    pub rssi_filter: RssiFilter,
+    /// Estimated distance in meters from the unified distance pipeline.
+    #[serde(skip)]
+    pub estimated_distance: Option<f32>,
+    /// Radar fraction [0, 1] for dot placement.
+    #[serde(skip)]
+    pub radar_fraction: f32,
+    /// Confidence in the distance estimate [0, 1].
+    #[serde(skip)]
+    pub distance_confidence: f32,
+    /// Source of TX power used for the last distance estimate.
+    #[serde(skip)]
+    pub distance_tx_source: Option<TxSource>,
 }
 
 impl Default for DeviceRecord {
@@ -144,6 +171,12 @@ impl Default for DeviceRecord {
             gatt_model: None,
             gatt_firmware: None,
             gatt_hardware: None,
+            last_ping: None,
+            rssi_filter: RssiFilter::default(),
+            estimated_distance: None,
+            radar_fraction: 1.0,
+            distance_confidence: 0.0,
+            distance_tx_source: None,
         }
     }
 }
@@ -213,6 +246,12 @@ impl DeviceRecord {
             gatt_model: None,
             gatt_firmware: None,
             gatt_hardware: None,
+            last_ping: None,
+            rssi_filter: RssiFilter::default(),
+            estimated_distance: None,
+            radar_fraction: 1.0,
+            distance_confidence: 0.0,
+            distance_tx_source: None,
         }
     }
 
@@ -278,13 +317,8 @@ impl DeviceRecord {
     }
 
     pub fn proximity_band(&self) -> &'static str {
-        match self
-            .rssi
-            .or_else(|| self.avg_rssi().map(|value| value.round() as i16))
-        {
-            Some(value) if value >= -58 => "Near",
-            Some(value) if value >= -74 => "Mid",
-            Some(_) => "Far",
+        match self.estimated_distance {
+            Some(d) => crate::distance::proximity_band_from_distance(d),
             None if self.stale => "Stale",
             None => "Unknown",
         }
@@ -715,63 +749,51 @@ mod tests {
     // ── proximity_band ──────────────────────────────────────────────
 
     #[test]
-    fn proximity_band_near_at_minus_58() {
+    fn proximity_band_near() {
         let mut d = make_device();
-        d.rssi = Some(-58);
+        d.estimated_distance = Some(0.5);
         assert_eq!(d.proximity_band(), "Near");
     }
 
     #[test]
-    fn proximity_band_near_above_minus_58() {
+    fn proximity_band_near_boundary() {
         let mut d = make_device();
-        d.rssi = Some(-30);
+        d.estimated_distance = Some(0.99);
         assert_eq!(d.proximity_band(), "Near");
     }
 
     #[test]
-    fn proximity_band_mid_at_minus_74() {
+    fn proximity_band_mid() {
         let mut d = make_device();
-        d.rssi = Some(-74);
+        d.estimated_distance = Some(2.5);
         assert_eq!(d.proximity_band(), "Mid");
     }
 
     #[test]
-    fn proximity_band_mid_at_minus_59() {
+    fn proximity_band_mid_boundary() {
         let mut d = make_device();
-        d.rssi = Some(-59);
+        d.estimated_distance = Some(3.99);
         assert_eq!(d.proximity_band(), "Mid");
     }
 
     #[test]
-    fn proximity_band_far_below_minus_74() {
+    fn proximity_band_far() {
         let mut d = make_device();
-        d.rssi = Some(-75);
+        d.estimated_distance = Some(10.0);
         assert_eq!(d.proximity_band(), "Far");
     }
 
     #[test]
-    fn proximity_band_stale_no_rssi() {
+    fn proximity_band_stale_no_distance() {
         let mut d = make_device();
         d.mark_stale();
         assert_eq!(d.proximity_band(), "Stale");
     }
 
     #[test]
-    fn proximity_band_unknown_no_rssi_not_stale() {
+    fn proximity_band_unknown_no_distance() {
         let d = make_device();
         assert_eq!(d.proximity_band(), "Unknown");
-    }
-
-    #[test]
-    fn proximity_band_falls_back_to_avg_rssi() {
-        let mut d = make_device();
-        d.rssi = None;
-        d.rssi_sum = -120;
-        d.rssi_sum_squares = 7200.0;
-        d.rssi_samples = 2;
-        // avg = -60, rounds to -60, >= -74 => "Mid"... wait, -60 >= -58? No. -60 < -58.
-        // Actually -60 >= -74 is true, so "Mid" — but -60 >= -58 is false. So "Mid".
-        assert_eq!(d.proximity_band(), "Mid");
     }
 
     // ── stability_score ─────────────────────────────────────────────

@@ -18,6 +18,20 @@ pub struct Settings {
     pub min_rssi: i16,
     pub refresh_interval_seconds: u64,
     pub retention_days: u32,
+    /// Indoor path loss exponent for distance estimation. Range [1.8, 5.0].
+    #[serde(default = "default_path_loss_n")]
+    pub path_loss_n: f32,
+    /// Default assumed RSSI at 1 m when no TX power is available (dBm).
+    #[serde(default = "default_tx_ref")]
+    pub default_tx_ref: f32,
+}
+
+fn default_path_loss_n() -> f32 {
+    2.5
+}
+
+fn default_tx_ref() -> f32 {
+    -59.0
 }
 
 impl Default for Settings {
@@ -31,6 +45,8 @@ impl Default for Settings {
             min_rssi: -95,
             refresh_interval_seconds: 5,
             retention_days: 30,
+            path_loss_n: default_path_loss_n(),
+            default_tx_ref: default_tx_ref(),
         }
     }
 }
@@ -104,6 +120,12 @@ impl Settings {
         }
         if self.retention_days == 0 {
             errors.push("Retention must be at least 1 day.".to_string());
+        }
+        if self.path_loss_n < 1.8 || self.path_loss_n > 5.0 {
+            errors.push("Path loss exponent must be between 1.8 and 5.0.".to_string());
+        }
+        if self.default_tx_ref < -80.0 || self.default_tx_ref > -30.0 {
+            errors.push("Default TX power must be between -80 and -30 dBm.".to_string());
         }
         ValidationErrors { errors }
     }
