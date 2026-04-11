@@ -6,7 +6,9 @@ use std::f32::consts::TAU;
 
 use eframe::egui::{self, RichText};
 
-use crate::model::{AppSnapshot, DeviceRecord, TrackerConfidence, format_duration_since, format_relative_time};
+use crate::model::{
+    AppSnapshot, DeviceRecord, TrackerConfidence, format_duration_since, format_relative_time,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewTab {
@@ -46,6 +48,7 @@ pub enum AppAction {
     SetAdapterPairable { adapter: String, pairable: bool },
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render(
     ctx: &egui::Context,
     snapshot: &AppSnapshot,
@@ -62,7 +65,10 @@ pub fn render(
         .frame(
             egui::Frame::new()
                 .fill(theme::color::BG_PANEL)
-                .inner_margin(egui::Margin::symmetric(theme::space::XL_I, theme::space::LG_I))
+                .inner_margin(egui::Margin::symmetric(
+                    theme::space::XL_I,
+                    theme::space::LG_I,
+                ))
                 .stroke(egui::Stroke::new(theme::stroke::THIN, theme::color::BORDER)),
         )
         .show(ctx, |ui| {
@@ -91,29 +97,20 @@ pub fn render(
                     .color(theme::color::TEXT_FAINT),
                 );
 
-                // Right cluster: tabs + action buttons
+                // Right cluster: tabs + action buttons (widgets added from the
+                // right edge inward, so the first `tab_button` appears rightmost).
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.style_mut().spacing.item_spacing.x = theme::space::SM;
-                    if components::tab_button(ui, "Log", *selected_tab == ViewTab::Log)
-                        .clicked()
-                    {
+                    if components::tab_button(ui, "Log", *selected_tab == ViewTab::Log).clicked() {
                         *selected_tab = ViewTab::Log;
                     }
-                    if components::tab_button(
-                        ui,
-                        "Adapter",
-                        *selected_tab == ViewTab::Adapter,
-                    )
-                    .clicked()
+                    if components::tab_button(ui, "Adapter", *selected_tab == ViewTab::Adapter)
+                        .clicked()
                     {
                         *selected_tab = ViewTab::Adapter;
                     }
-                    if components::tab_button(
-                        ui,
-                        "Profiles",
-                        *selected_tab == ViewTab::Profiles,
-                    )
-                    .clicked()
+                    if components::tab_button(ui, "Profiles", *selected_tab == ViewTab::Profiles)
+                        .clicked()
                     {
                         *selected_tab = ViewTab::Profiles;
                     }
@@ -122,42 +119,42 @@ pub fn render(
                     {
                         *selected_tab = ViewTab::Radar;
                     }
-                    if components::tab_button(ui, "Scan", *selected_tab == ViewTab::Scan)
-                        .clicked()
+                    if components::tab_button(ui, "Scan", *selected_tab == ViewTab::Scan).clicked()
                     {
                         *selected_tab = ViewTab::Scan;
                     }
 
                     ui.add_space(theme::space::MD);
 
-                    // Settings gear (overflow menu stand-in)
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new("Settings")
-                                    .size(theme::text::BUTTON)
-                                    .color(theme::color::TEXT_DIM),
-                            )
-                            .fill(egui::Color32::TRANSPARENT)
-                            .stroke(egui::Stroke::new(
-                                theme::stroke::THIN,
-                                theme::color::BORDER,
-                            ))
-                            .corner_radius(egui::CornerRadius::same(
-                                theme::radius::MD as u8,
-                            )),
-                        )
+                    // Settings
+                    if components::ghost_button(ui, "Settings", theme::color::TEXT_DIM).clicked() {
+                        action = Some(AppAction::OpenSettings);
+                    }
+
+                    // Refresh
+                    if components::ghost_button(ui, "Refresh", theme::color::TEXT_DIM).clicked() {
+                        action = Some(AppAction::Refresh);
+                    }
+
+                    // Start / Stop passive scan — coloured by current state so the
+                    // button also acts as a secondary status indicator.
+                    if snapshot.scan_active {
+                        if components::ghost_button(ui, "Stop scan", theme::color::STALE).clicked()
+                        {
+                            action = Some(AppAction::StopScan);
+                        }
+                    } else if components::ghost_button(ui, "Start scan", theme::color::NEAR)
                         .clicked()
                     {
-                        action = Some(AppAction::OpenSettings);
+                        action = Some(AppAction::StartScan);
                     }
                 });
             });
         });
 
     // Device detail panel only shown on Scan and Radar views
-    if matches!(*selected_tab, ViewTab::Scan | ViewTab::Radar) && let Some(device_action) =
-        egui::SidePanel::right("device_detail")
+    if matches!(*selected_tab, ViewTab::Scan | ViewTab::Radar)
+        && let Some(device_action) = egui::SidePanel::right("device_detail")
             .min_width(320.0)
             .frame(
                 egui::Frame::new()
@@ -218,10 +215,7 @@ fn render_scan_view(
     // ── Filter bar: pills on the left, Scan button on the right ─────────────
     egui::Frame::new()
         .fill(theme::color::BG_PANEL)
-        .stroke(egui::Stroke::new(
-            theme::stroke::THIN,
-            theme::color::BORDER,
-        ))
+        .stroke(egui::Stroke::new(theme::stroke::THIN, theme::color::BORDER))
         .inner_margin(egui::Margin::symmetric(
             theme::space::XL_I,
             theme::space::MD_I,
@@ -237,20 +231,15 @@ fn render_scan_view(
                     (ScanFilter::Far, "Far", theme::color::FAR),
                     (ScanFilter::Stale, "Stale", theme::color::STALE),
                 ] {
-                    if components::toggle_pill(ui, label, *scan_filter == variant, accent)
-                        .clicked()
+                    if components::toggle_pill(ui, label, *scan_filter == variant, accent).clicked()
                     {
                         *scan_filter = variant;
                     }
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if components::primary_button(
-                        ui,
-                        "Scan for devices",
-                        theme::color::NEAR,
-                    )
-                    .clicked()
+                    if components::primary_button(ui, "Scan for devices", theme::color::NEAR)
+                        .clicked()
                     {
                         action = Some(AppAction::CaptureScan);
                     }
@@ -350,12 +339,13 @@ fn render_scan_view(
                 egui::Color32::TRANSPARENT
             };
 
-            let mut frame = egui::Frame::new()
-                .fill(row_fill)
-                .inner_margin(egui::Margin::symmetric(
-                    theme::space::XL_I,
-                    theme::space::MD_I,
-                ));
+            let mut frame =
+                egui::Frame::new()
+                    .fill(row_fill)
+                    .inner_margin(egui::Margin::symmetric(
+                        theme::space::XL_I,
+                        theme::space::MD_I,
+                    ));
             if selected {
                 frame = frame.stroke(egui::Stroke::new(2.0, theme::color::MID));
             }
@@ -529,7 +519,10 @@ fn render_radar_canvas(
             center,
             r,
             tint.gamma_multiply(theme::alpha::TRACE),
-            egui::Stroke::new(theme::stroke::THIN, tint.gamma_multiply(theme::alpha::BADGE)),
+            egui::Stroke::new(
+                theme::stroke::THIN,
+                tint.gamma_multiply(theme::alpha::BADGE),
+            ),
         );
         // dBm label at top of ring
         painter.text(
@@ -589,10 +582,7 @@ fn render_radar_canvas(
                 };
 
             let r = radius * distance_fraction;
-            let dot_pos = egui::pos2(
-                center.x + r * angle.cos(),
-                center.y + r * angle.sin(),
-            );
+            let dot_pos = egui::pos2(center.x + r * angle.cos(), center.y + r * angle.sin());
 
             let tint = band_color(device);
             let is_selected = selected_device.as_deref() == Some(device.address.as_str());
@@ -604,7 +594,11 @@ fn render_radar_canvas(
             } else {
                 3.0 + (device.stability_score() as f32 / 100.0) * 5.0
             };
-            let dot_radius = if is_selected { base_dot + 3.0 } else { base_dot };
+            let dot_radius = if is_selected {
+                base_dot + 3.0
+            } else {
+                base_dot
+            };
             let alpha = if is_stale { 0.45 } else { 0.85 };
 
             // Filled dot
@@ -621,8 +615,7 @@ fn render_radar_canvas(
 
             // Hover detection
             let hit_radius = dot_radius.max(8.0);
-            let is_hovered = pointer_pos
-                .is_some_and(|pos| pos.distance(dot_pos) <= hit_radius);
+            let is_hovered = pointer_pos.is_some_and(|pos| pos.distance(dot_pos) <= hit_radius);
 
             // Show label only for: selected, named (non-unknown), or hovered
             let has_name = device.display_name() != "Unknown device";
@@ -683,7 +676,10 @@ fn render_radar_canvas(
                 device.recurrence_label(),
                 device.stability_score()
             ));
-            ui.label(format!("Last seen: {}", format_relative_time(device.last_seen)));
+            ui.label(format!(
+                "Last seen: {}",
+                format_relative_time(device.last_seen)
+            ));
             if let Some(battery) = device.battery_percentage {
                 ui.label(format!("Battery: {battery}%"));
             }
@@ -839,13 +835,8 @@ fn render_profiles_view(
                     ("Last seen", ProfileSort::LastSeen),
                     ("RSSI", ProfileSort::Rssi),
                 ] {
-                    if components::toggle_pill(
-                        ui,
-                        label,
-                        sort_mode == mode,
-                        theme::color::MID,
-                    )
-                    .clicked()
+                    if components::toggle_pill(ui, label, sort_mode == mode, theme::color::MID)
+                        .clicked()
                     {
                         sort_mode = mode;
                         ui.data_mut(|d| d.insert_temp(sort_id, sort_mode));
@@ -901,9 +892,7 @@ fn render_profiles_view(
                         .then_with(|| b.first_seen.cmp(&a.first_seen))
                         .then_with(|| a.address.cmp(&b.address))
                 }),
-                ProfileSort::Name => {
-                    devices.sort_by(|a, b| a.display_name().cmp(b.display_name()))
-                }
+                ProfileSort::Name => devices.sort_by(|a, b| a.display_name().cmp(b.display_name())),
                 ProfileSort::LastSeen => devices.sort_by(|a, b| b.last_seen.cmp(&a.last_seen)),
                 ProfileSort::Rssi => devices.sort_by(|a, b| {
                     let ra = a.rssi.unwrap_or(i16::MIN);
@@ -1193,7 +1182,11 @@ fn render_detail_header(ui: &mut egui::Ui, device: &DeviceRecord) {
 
 fn render_detail_section_status(ui: &mut egui::Ui, device: &DeviceRecord) {
     components::section(ui, "Status", |ui| {
-        let state_label = if device.stale { "● Stale" } else { "● Active" };
+        let state_label = if device.stale {
+            "● Stale"
+        } else {
+            "● Active"
+        };
         let state_color = theme::state_color(device.stale);
         components::kv_row_colored(ui, "State", state_label, state_color);
         components::kv_row_mono(
@@ -1276,8 +1269,7 @@ fn render_detail_section_manage(
                 );
                 let submitted =
                     response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if components::ghost_button(ui, "Apply", theme::color::MID).clicked() || submitted
-                {
+                if components::ghost_button(ui, "Apply", theme::color::MID).clicked() || submitted {
                     action = Some(AppAction::SetAlias {
                         address: addr.clone(),
                         alias: draft.trim().to_string(),
@@ -1328,11 +1320,7 @@ fn render_detail_section_signal(ui: &mut egui::Ui, device: &DeviceRecord) {
             device.proximity_band(),
             theme::proximity_band_color(device.proximity_band()),
         );
-        components::kv_row(
-            ui,
-            "Stability",
-            format!("{}%", device.stability_score()),
-        );
+        components::kv_row(ui, "Stability", format!("{}%", device.stability_score()));
         if let Some(battery) = device.battery_percentage {
             components::kv_row(ui, "Battery", format!("{battery}%"));
         }
@@ -1370,7 +1358,13 @@ fn render_detail_section_advertising(ui: &mut egui::Ui, device: &DeviceRecord) {
             components::kv_row_mono(ui, "Local name", name);
         }
         if !device.uuids.is_empty() {
-            let joined = device.uuids.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+            let joined = device
+                .uuids
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
             components::kv_row_mono(ui, "Service UUIDs", &joined);
         }
         if !device.manufacturer_data.is_empty() {
@@ -1550,17 +1544,12 @@ fn render_adapter_view(ui: &mut egui::Ui, snapshot: &AppSnapshot) -> Option<AppA
                                     powered: on,
                                 });
                             });
-                            toggle_switch_row(
-                                ui,
-                                "Discoverable",
-                                adapter.discoverable,
-                                |on| {
-                                    action = Some(AppAction::SetAdapterDiscoverable {
-                                        adapter: adapter.name.clone(),
-                                        discoverable: on,
-                                    });
-                                },
-                            );
+                            toggle_switch_row(ui, "Discoverable", adapter.discoverable, |on| {
+                                action = Some(AppAction::SetAdapterDiscoverable {
+                                    adapter: adapter.name.clone(),
+                                    discoverable: on,
+                                });
+                            });
                             toggle_switch_row(ui, "Pairable", adapter.pairable, |on| {
                                 action = Some(AppAction::SetAdapterPairable {
                                     adapter: adapter.name.clone(),
@@ -1599,12 +1588,7 @@ fn render_adapter_view(ui: &mut egui::Ui, snapshot: &AppSnapshot) -> Option<AppA
     action
 }
 
-fn toggle_switch_row(
-    ui: &mut egui::Ui,
-    label: &str,
-    on: bool,
-    mut on_toggle: impl FnMut(bool),
-) {
+fn toggle_switch_row(ui: &mut egui::Ui, label: &str, on: bool, mut on_toggle: impl FnMut(bool)) {
     ui.horizontal(|ui| {
         ui.label(
             RichText::new(label)
@@ -1646,39 +1630,41 @@ fn render_log_view(ui: &mut egui::Ui, snapshot: &AppSnapshot) {
                 .stroke(egui::Stroke::new(theme::stroke::THIN, theme::color::BORDER))
                 .inner_margin(egui::Margin::same(theme::space::LG_I))
                 .show(ui, |ui| {
-                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                        ui.style_mut().spacing.item_spacing.y = theme::space::XS;
-                        for entry in &snapshot.event_log {
-                            let level_color = theme::log_level_color(&entry.level);
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(
-                                    RichText::new(
-                                        entry
-                                            .at
-                                            .with_timezone(&chrono::Local)
-                                            .format("%H:%M:%S")
-                                            .to_string(),
-                                    )
-                                    .monospace()
-                                    .size(theme::text::MONO)
-                                    .color(theme::color::TEXT_FAINT),
-                                );
-                                ui.label(
-                                    RichText::new(entry.level.label())
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.style_mut().spacing.item_spacing.y = theme::space::XS;
+                            for entry in &snapshot.event_log {
+                                let level_color = theme::log_level_color(&entry.level);
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(
+                                        RichText::new(
+                                            entry
+                                                .at
+                                                .with_timezone(&chrono::Local)
+                                                .format("%H:%M:%S")
+                                                .to_string(),
+                                        )
                                         .monospace()
                                         .size(theme::text::MONO)
-                                        .color(level_color)
-                                        .strong(),
-                                );
-                                ui.label(
-                                    RichText::new(entry.message.as_str())
-                                        .monospace()
-                                        .size(theme::text::MONO)
-                                        .color(theme::color::TEXT_SECONDARY),
-                                );
-                            });
-                        }
-                    });
+                                        .color(theme::color::TEXT_FAINT),
+                                    );
+                                    ui.label(
+                                        RichText::new(entry.level.label())
+                                            .monospace()
+                                            .size(theme::text::MONO)
+                                            .color(level_color)
+                                            .strong(),
+                                    );
+                                    ui.label(
+                                        RichText::new(entry.message.as_str())
+                                            .monospace()
+                                            .size(theme::text::MONO)
+                                            .color(theme::color::TEXT_SECONDARY),
+                                    );
+                                });
+                            }
+                        });
                 });
         });
 }

@@ -61,11 +61,16 @@ impl BluetoothApp {
     }
 
     fn capture_scan(&mut self) {
-        self.captured_devices = self.snapshot.devices.clone();
-        self.captured_at = Some(Utc::now());
+        // If the passive scanner is currently off, treat the click as "start
+        // scanning" instead of "capture empty snapshot". This avoids the
+        // two-click footgun where the first click freezes an empty list and
+        // the user has to click again once results arrive.
         if !self.snapshot.scan_active {
             self.scanner.start_scan();
+            return;
         }
+        self.captured_devices = self.snapshot.devices.clone();
+        self.captured_at = Some(Utc::now());
     }
 }
 
@@ -113,7 +118,10 @@ impl eframe::App for BluetoothApp {
                 AppAction::SetAdapterPowered { adapter, powered } => {
                     self.scanner.set_adapter_powered(adapter, powered);
                 }
-                AppAction::SetAdapterDiscoverable { adapter, discoverable } => {
+                AppAction::SetAdapterDiscoverable {
+                    adapter,
+                    discoverable,
+                } => {
                     self.scanner.set_adapter_discoverable(adapter, discoverable);
                 }
                 AppAction::SetAdapterPairable { adapter, pairable } => {
@@ -157,8 +165,7 @@ fn configure_theme(ctx: &egui::Context) {
     style.visuals.widgets.active.bg_fill = color::BG_SURFACE_3;
 
     // Borders
-    style.visuals.widgets.noninteractive.bg_stroke =
-        egui::Stroke::new(1.0, color::BORDER);
+    style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, color::BORDER);
     style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, color::BORDER);
     style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, color::BORDER_MUTED);
     style.visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, color::ACCENT);
@@ -168,14 +175,10 @@ fn configure_theme(ctx: &egui::Context) {
     style.visuals.selection.stroke = egui::Stroke::new(1.0, color::MID);
 
     // Text on widgets
-    style.visuals.widgets.noninteractive.fg_stroke =
-        egui::Stroke::new(1.0, color::TEXT_PRIMARY);
-    style.visuals.widgets.inactive.fg_stroke =
-        egui::Stroke::new(1.0, color::TEXT_SECONDARY);
-    style.visuals.widgets.hovered.fg_stroke =
-        egui::Stroke::new(1.0, color::TEXT_PRIMARY);
-    style.visuals.widgets.active.fg_stroke =
-        egui::Stroke::new(1.0, color::TEXT_PRIMARY);
+    style.visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, color::TEXT_PRIMARY);
+    style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, color::TEXT_SECONDARY);
+    style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, color::TEXT_PRIMARY);
+    style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, color::TEXT_PRIMARY);
 
     style.spacing.item_spacing = egui::vec2(space::MD, space::MD);
     style.spacing.button_padding = egui::vec2(space::LG, space::SM);
