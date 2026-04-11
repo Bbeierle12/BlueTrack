@@ -6,8 +6,8 @@ use std::{
 use bluer::{
     Adapter, AdapterEvent, Address, DeviceProperty, DiscoveryFilter, DiscoveryTransport, Session,
 };
-use eframe::egui;
 use chrono::Utc;
+use eframe::egui;
 use futures::StreamExt;
 use tokio::{
     runtime::Builder,
@@ -85,11 +85,15 @@ impl ScannerHandle {
     }
 
     pub fn set_trusted(&self, address: String, trusted: bool) {
-        let _ = self.commands.send(WorkerCommand::SetTrusted(address, trusted));
+        let _ = self
+            .commands
+            .send(WorkerCommand::SetTrusted(address, trusted));
     }
 
     pub fn set_blocked(&self, address: String, blocked: bool) {
-        let _ = self.commands.send(WorkerCommand::SetBlocked(address, blocked));
+        let _ = self
+            .commands
+            .send(WorkerCommand::SetBlocked(address, blocked));
     }
 
     pub fn forget_device(&self, address: String) {
@@ -101,15 +105,21 @@ impl ScannerHandle {
     }
 
     pub fn set_adapter_powered(&self, adapter: String, powered: bool) {
-        let _ = self.commands.send(WorkerCommand::SetAdapterPowered(adapter, powered));
+        let _ = self
+            .commands
+            .send(WorkerCommand::SetAdapterPowered(adapter, powered));
     }
 
     pub fn set_adapter_discoverable(&self, adapter: String, discoverable: bool) {
-        let _ = self.commands.send(WorkerCommand::SetAdapterDiscoverable(adapter, discoverable));
+        let _ = self
+            .commands
+            .send(WorkerCommand::SetAdapterDiscoverable(adapter, discoverable));
     }
 
     pub fn set_adapter_pairable(&self, adapter: String, pairable: bool) {
-        let _ = self.commands.send(WorkerCommand::SetAdapterPairable(adapter, pairable));
+        let _ = self
+            .commands
+            .send(WorkerCommand::SetAdapterPairable(adapter, pairable));
     }
 }
 
@@ -240,10 +250,10 @@ impl Worker {
                     self.refresh_adapters().await;
                     // Prune old sightings every ~60 ticks (~5 min at default interval)
                     // instead of every tick, to avoid unnecessary DB churn.
-                    if self.tick_count % 60 == 0 {
-                        if let Some(store) = &self.store {
-                            let _ = store.prune_old_sightings(self.settings.retention_days);
-                        }
+                    if self.tick_count.is_multiple_of(60)
+                        && let Some(store) = &self.store
+                    {
+                        let _ = store.prune_old_sightings(self.settings.retention_days);
                     }
                     self.sighting_throttle.retain(|address, _| self.devices.contains_key(address));
                     self.upsert_throttle.retain(|address, _| self.devices.contains_key(address));
@@ -446,10 +456,7 @@ impl Worker {
                 {
                     // Persist a sighting row on genuine new appearances only.
                     let now = device.last_seen;
-                    if should_persist_sighting(
-                        self.sighting_throttle.get(&device.address),
-                        now,
-                    ) {
+                    if should_persist_sighting(self.sighting_throttle.get(&device.address), now) {
                         if let Some(store) = &self.store {
                             let _ = store.insert_sighting(&device, now);
                         }
@@ -594,12 +601,9 @@ impl Worker {
         // and would just bloat the sightings table.
         let should_upsert = is_public
             && (is_first
-                || self
-                    .upsert_throttle
-                    .get(&address_key)
-                    .is_none_or(|last| {
-                        now.signed_duration_since(*last) >= chrono::Duration::seconds(5)
-                    }));
+                || self.upsert_throttle.get(&address_key).is_none_or(|last| {
+                    now.signed_duration_since(*last) >= chrono::Duration::seconds(5)
+                }));
         if should_upsert {
             if let Some(store) = &self.store {
                 let _ = store.upsert_device(record);
@@ -644,7 +648,11 @@ impl Worker {
     fn emit_snapshot(&mut self) {
         let live_devices = self.devices.values().filter(|d| !d.stale).count();
         let stale_devices = self.devices.len().saturating_sub(live_devices);
-        let public_devices = self.devices.values().filter(|d| d.is_public_address()).count();
+        let public_devices = self
+            .devices
+            .values()
+            .filter(|d| d.is_public_address())
+            .count();
         let random_devices = self.devices.len().saturating_sub(public_devices);
         self.metrics.total_devices = self.devices.len();
         self.metrics.live_devices = live_devices;
@@ -757,7 +765,10 @@ impl Worker {
 
     async fn cmd_set_alias(&mut self, address: &str, alias: &str) {
         let result = match self.get_device(address).await {
-            Ok(device) => device.set_alias(alias.to_string()).await.map_err(|e| e.to_string()),
+            Ok(device) => device
+                .set_alias(alias.to_string())
+                .await
+                .map_err(|e| e.to_string()),
             Err(e) => Err(e),
         };
         self.apply_set_alias(address, alias, result);
@@ -775,7 +786,9 @@ impl Worker {
     }
 
     async fn cmd_adapter_discoverable(&mut self, adapter_name: &str, discoverable: bool) {
-        let result = self.do_set_adapter_discoverable(adapter_name, discoverable).await;
+        let result = self
+            .do_set_adapter_discoverable(adapter_name, discoverable)
+            .await;
         if self.apply_adapter_discoverable(adapter_name, discoverable, result) {
             self.refresh_adapters().await;
         }
@@ -878,7 +891,12 @@ impl Worker {
     }
 
     /// Returns `true` if the caller should follow up with `refresh_adapters`.
-    fn apply_adapter_powered(&mut self, adapter_name: &str, powered: bool, result: Result<(), String>) -> bool {
+    fn apply_adapter_powered(
+        &mut self,
+        adapter_name: &str,
+        powered: bool,
+        result: Result<(), String>,
+    ) -> bool {
         match result {
             Ok(()) => {
                 let verb = if powered { "Powered on" } else { "Powered off" };
@@ -893,10 +911,19 @@ impl Worker {
     }
 
     /// Returns `true` if the caller should follow up with `refresh_adapters`.
-    fn apply_adapter_discoverable(&mut self, adapter_name: &str, discoverable: bool, result: Result<(), String>) -> bool {
+    fn apply_adapter_discoverable(
+        &mut self,
+        adapter_name: &str,
+        discoverable: bool,
+        result: Result<(), String>,
+    ) -> bool {
         match result {
             Ok(()) => {
-                let verb = if discoverable { "Discoverable on" } else { "Discoverable off" };
+                let verb = if discoverable {
+                    "Discoverable on"
+                } else {
+                    "Discoverable off"
+                };
                 self.log(LogLevel::Info, format!("{verb} {adapter_name}"));
                 true
             }
@@ -908,10 +935,19 @@ impl Worker {
     }
 
     /// Returns `true` if the caller should follow up with `refresh_adapters`.
-    fn apply_adapter_pairable(&mut self, adapter_name: &str, pairable: bool, result: Result<(), String>) -> bool {
+    fn apply_adapter_pairable(
+        &mut self,
+        adapter_name: &str,
+        pairable: bool,
+        result: Result<(), String>,
+    ) -> bool {
         match result {
             Ok(()) => {
-                let verb = if pairable { "Pairable on" } else { "Pairable off" };
+                let verb = if pairable {
+                    "Pairable on"
+                } else {
+                    "Pairable off"
+                };
                 self.log(LogLevel::Info, format!("{verb} {adapter_name}"));
                 true
             }
@@ -943,8 +979,15 @@ impl Worker {
             .map_err(|e| format!("Forget {address} failed: {e}"))
     }
 
-    async fn do_set_adapter_powered(&self, adapter_name: &str, powered: bool) -> Result<(), String> {
-        let session = self.session.as_ref().ok_or("No BlueZ session".to_string())?;
+    async fn do_set_adapter_powered(
+        &self,
+        adapter_name: &str,
+        powered: bool,
+    ) -> Result<(), String> {
+        let session = self
+            .session
+            .as_ref()
+            .ok_or("No BlueZ session".to_string())?;
         let adapter = session
             .adapter(adapter_name)
             .map_err(|e| format!("Cannot open adapter {adapter_name}: {e}"))?;
@@ -954,8 +997,15 @@ impl Worker {
             .map_err(|e| format!("Set powered {adapter_name} failed: {e}"))
     }
 
-    async fn do_set_adapter_discoverable(&self, adapter_name: &str, discoverable: bool) -> Result<(), String> {
-        let session = self.session.as_ref().ok_or("No BlueZ session".to_string())?;
+    async fn do_set_adapter_discoverable(
+        &self,
+        adapter_name: &str,
+        discoverable: bool,
+    ) -> Result<(), String> {
+        let session = self
+            .session
+            .as_ref()
+            .ok_or("No BlueZ session".to_string())?;
         let adapter = session
             .adapter(adapter_name)
             .map_err(|e| format!("Cannot open adapter {adapter_name}: {e}"))?;
@@ -965,8 +1015,15 @@ impl Worker {
             .map_err(|e| format!("Set discoverable {adapter_name} failed: {e}"))
     }
 
-    async fn do_set_adapter_pairable(&self, adapter_name: &str, pairable: bool) -> Result<(), String> {
-        let session = self.session.as_ref().ok_or("No BlueZ session".to_string())?;
+    async fn do_set_adapter_pairable(
+        &self,
+        adapter_name: &str,
+        pairable: bool,
+    ) -> Result<(), String> {
+        let session = self
+            .session
+            .as_ref()
+            .ok_or("No BlueZ session".to_string())?;
         let adapter = session
             .adapter(adapter_name)
             .map_err(|e| format!("Cannot open adapter {adapter_name}: {e}"))?;
@@ -1095,7 +1152,11 @@ mod tests {
         let purge_after = chrono::Duration::seconds(60);
 
         let mut devices = HashMap::new();
-        let mut d = DeviceRecord::new("AA:BB:CC:DD:EE:FF", "hci0", now - chrono::Duration::seconds(35));
+        let mut d = DeviceRecord::new(
+            "AA:BB:CC:DD:EE:FF",
+            "hci0",
+            now - chrono::Duration::seconds(35),
+        );
         d.address_type = Some("public".into());
         devices.insert(d.address.clone(), d);
 
@@ -1111,7 +1172,11 @@ mod tests {
         let purge_after = chrono::Duration::seconds(60);
 
         let mut devices = HashMap::new();
-        let d = DeviceRecord::new("AA:BB:CC:DD:EE:FF", "hci0", now - chrono::Duration::seconds(10));
+        let d = DeviceRecord::new(
+            "AA:BB:CC:DD:EE:FF",
+            "hci0",
+            now - chrono::Duration::seconds(10),
+        );
         devices.insert(d.address.clone(), d);
 
         apply_stale_policy(&mut devices, stale_after, purge_after, now);
@@ -1126,13 +1191,20 @@ mod tests {
         let purge_after = chrono::Duration::seconds(60);
 
         let mut devices = HashMap::new();
-        let mut d = DeviceRecord::new("AA:BB:CC:DD:EE:FF", "hci0", now - chrono::Duration::seconds(65));
+        let mut d = DeviceRecord::new(
+            "AA:BB:CC:DD:EE:FF",
+            "hci0",
+            now - chrono::Duration::seconds(65),
+        );
         d.address_type = Some("random".into());
         devices.insert(d.address.clone(), d);
 
         apply_stale_policy(&mut devices, stale_after, purge_after, now);
 
-        assert!(devices.is_empty(), "random device past purge_after should be removed");
+        assert!(
+            devices.is_empty(),
+            "random device past purge_after should be removed"
+        );
     }
 
     #[test]
@@ -1142,7 +1214,11 @@ mod tests {
         let purge_after = chrono::Duration::seconds(60);
 
         let mut devices = HashMap::new();
-        let mut d = DeviceRecord::new("AA:BB:CC:DD:EE:FF", "hci0", now - chrono::Duration::seconds(65));
+        let mut d = DeviceRecord::new(
+            "AA:BB:CC:DD:EE:FF",
+            "hci0",
+            now - chrono::Duration::seconds(65),
+        );
         d.address_type = Some("public".into());
         devices.insert(d.address.clone(), d);
 
@@ -1161,16 +1237,28 @@ mod tests {
         let mut devices = HashMap::new();
 
         // Recent device (no address_type) — kept, not stale
-        let d1 = DeviceRecord::new("AA:00:00:00:00:01", "hci0", now - chrono::Duration::seconds(10));
+        let d1 = DeviceRecord::new(
+            "AA:00:00:00:00:01",
+            "hci0",
+            now - chrono::Duration::seconds(10),
+        );
         devices.insert(d1.address.clone(), d1);
 
         // Old random device — purged
-        let mut d2 = DeviceRecord::new("AA:00:00:00:00:02", "hci0", now - chrono::Duration::seconds(65));
+        let mut d2 = DeviceRecord::new(
+            "AA:00:00:00:00:02",
+            "hci0",
+            now - chrono::Duration::seconds(65),
+        );
         d2.address_type = Some("random".into());
         devices.insert(d2.address.clone(), d2);
 
         // Old public device — kept but stale
-        let mut d3 = DeviceRecord::new("AA:00:00:00:00:03", "hci0", now - chrono::Duration::seconds(65));
+        let mut d3 = DeviceRecord::new(
+            "AA:00:00:00:00:03",
+            "hci0",
+            now - chrono::Duration::seconds(65),
+        );
         d3.address_type = Some("public".into());
         devices.insert(d3.address.clone(), d3);
 
@@ -1191,7 +1279,11 @@ mod tests {
         let purge_after = chrono::Duration::seconds(60);
 
         let mut devices = HashMap::new();
-        let d = DeviceRecord::new("AA:BB:CC:DD:EE:FF", "hci0", now - chrono::Duration::seconds(30));
+        let d = DeviceRecord::new(
+            "AA:BB:CC:DD:EE:FF",
+            "hci0",
+            now - chrono::Duration::seconds(30),
+        );
         devices.insert(d.address.clone(), d);
 
         apply_stale_policy(&mut devices, stale_after, purge_after, now);
@@ -1254,7 +1346,13 @@ mod tests {
         let mut w = make_test_worker();
         let should_sync = w.apply_disconnect_result("AA:BB:CC:DD:EE:FF", Ok(()));
         assert!(should_sync);
-        assert!(w.event_log.front().unwrap().message.contains("Disconnected"));
+        assert!(
+            w.event_log
+                .front()
+                .unwrap()
+                .message
+                .contains("Disconnected")
+        );
     }
 
     #[test]
@@ -1326,7 +1424,10 @@ mod tests {
     fn apply_set_alias_sets_alias_on_device() {
         let mut w = make_test_worker();
         let addr = "AA:BB:CC:DD:EE:FF";
-        w.devices.insert(addr.to_string(), DeviceRecord::new(addr, "hci0", Utc::now()));
+        w.devices.insert(
+            addr.to_string(),
+            DeviceRecord::new(addr, "hci0", Utc::now()),
+        );
         w.apply_set_alias(addr, "My Headphones", Ok(()));
         assert_eq!(w.devices[addr].alias.as_deref(), Some("My Headphones"));
         assert!(w.event_log.front().unwrap().message.contains("Renamed"));
@@ -1354,7 +1455,10 @@ mod tests {
     fn apply_forget_result_removes_device_and_throttles() {
         let mut w = make_test_worker();
         let addr = "AA:BB:CC:DD:EE:FF";
-        w.devices.insert(addr.to_string(), DeviceRecord::new(addr, "hci0", Utc::now()));
+        w.devices.insert(
+            addr.to_string(),
+            DeviceRecord::new(addr, "hci0", Utc::now()),
+        );
         w.sighting_throttle.insert(addr.to_string(), Utc::now());
         w.upsert_throttle.insert(addr.to_string(), Utc::now());
         w.apply_forget_result(addr, Ok(()));
@@ -1368,9 +1472,15 @@ mod tests {
     fn apply_forget_result_error_preserves_device() {
         let mut w = make_test_worker();
         let addr = "AA:BB:CC:DD:EE:FF";
-        w.devices.insert(addr.to_string(), DeviceRecord::new(addr, "hci0", Utc::now()));
+        w.devices.insert(
+            addr.to_string(),
+            DeviceRecord::new(addr, "hci0", Utc::now()),
+        );
         w.apply_forget_result(addr, Err("adapter gone".into()));
-        assert!(w.devices.contains_key(addr), "device must not be removed on error");
+        assert!(
+            w.devices.contains_key(addr),
+            "device must not be removed on error"
+        );
         assert!(w.last_error.is_some());
     }
 
@@ -1403,7 +1513,13 @@ mod tests {
         let mut w = make_test_worker();
         let refresh = w.apply_adapter_discoverable("hci0", true, Ok(()));
         assert!(refresh);
-        assert!(w.event_log.front().unwrap().message.contains("Discoverable on"));
+        assert!(
+            w.event_log
+                .front()
+                .unwrap()
+                .message
+                .contains("Discoverable on")
+        );
     }
 
     #[test]
@@ -1411,7 +1527,13 @@ mod tests {
         let mut w = make_test_worker();
         let refresh = w.apply_adapter_discoverable("hci0", false, Ok(()));
         assert!(refresh);
-        assert!(w.event_log.front().unwrap().message.contains("Discoverable off"));
+        assert!(
+            w.event_log
+                .front()
+                .unwrap()
+                .message
+                .contains("Discoverable off")
+        );
     }
 
     #[test]
@@ -1427,7 +1549,13 @@ mod tests {
         let mut w = make_test_worker();
         let refresh = w.apply_adapter_pairable("hci0", false, Ok(()));
         assert!(refresh);
-        assert!(w.event_log.front().unwrap().message.contains("Pairable off"));
+        assert!(
+            w.event_log
+                .front()
+                .unwrap()
+                .message
+                .contains("Pairable off")
+        );
     }
 
     #[test]

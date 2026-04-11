@@ -1,9 +1,10 @@
 use bluer::DiscoveryTransport;
-use eframe::egui;
+use eframe::egui::{self, RichText};
 
 use crate::{
     model::AdapterStatus,
     settings::{Settings, ValidationErrors},
+    ui::{components, theme},
 };
 
 pub struct SettingsModal {
@@ -59,16 +60,25 @@ impl SettingsModal {
         ui: &mut egui::Ui,
         adapters: &[AdapterStatus],
     ) -> SettingsModalResult {
-        ui.heading("Discovery");
-        ui.add_space(6.0);
+        ui.label(
+            RichText::new("Discovery")
+                .size(theme::text::SUBHEADING)
+                .color(theme::color::TEXT_PRIMARY)
+                .strong(),
+        );
+        ui.add_space(theme::space::MD);
 
         let before = self.draft.clone();
 
         egui::Grid::new("settings_grid")
             .num_columns(2)
-            .spacing([16.0, 8.0])
+            .spacing([theme::space::XL, theme::space::MD])
             .show(ui, |ui| {
-                ui.label("Preferred adapter");
+                ui.label(
+                    RichText::new("Preferred adapter")
+                        .size(theme::text::BODY)
+                        .color(theme::color::TEXT_DIM),
+                );
                 egui::ComboBox::from_id_salt("adapter_select")
                     .selected_text(self.draft.selected_adapter.as_deref().unwrap_or("Default"))
                     .show_ui(ui, |ui| {
@@ -83,35 +93,57 @@ impl SettingsModal {
                     });
                 ui.end_row();
 
-                ui.label("Transport");
+                ui.label(
+                    RichText::new("Transport")
+                        .size(theme::text::BODY)
+                        .color(theme::color::TEXT_DIM),
+                );
                 ui.horizontal(|ui| {
-                    ui.selectable_value(
-                        &mut self.draft.scan_transport,
-                        DiscoveryTransport::Auto,
-                        "Auto",
-                    );
-                    ui.selectable_value(
-                        &mut self.draft.scan_transport,
-                        DiscoveryTransport::Le,
-                        "LE",
-                    );
-                    ui.selectable_value(
-                        &mut self.draft.scan_transport,
-                        DiscoveryTransport::BrEdr,
-                        "BR/EDR",
-                    );
+                    ui.style_mut().spacing.item_spacing.x = theme::space::SM;
+                    for (label, value) in [
+                        ("Auto", DiscoveryTransport::Auto),
+                        ("LE", DiscoveryTransport::Le),
+                        ("BR/EDR", DiscoveryTransport::BrEdr),
+                    ] {
+                        if components::toggle_pill(
+                            ui,
+                            label,
+                            self.draft.scan_transport == value,
+                            theme::color::MID,
+                        )
+                        .clicked()
+                        {
+                            self.draft.scan_transport = value;
+                        }
+                    }
                 });
                 ui.end_row();
 
-                ui.label("Auto-start scan");
-                ui.checkbox(&mut self.draft.auto_start_scan, "");
+                ui.label(
+                    RichText::new("Auto-start scan")
+                        .size(theme::text::BODY)
+                        .color(theme::color::TEXT_DIM),
+                );
+                if components::toggle_switch(ui, self.draft.auto_start_scan).clicked() {
+                    self.draft.auto_start_scan = !self.draft.auto_start_scan;
+                }
                 ui.end_row();
 
-                ui.label("Duplicate advertisement data");
-                ui.checkbox(&mut self.draft.allow_duplicate_data, "");
+                ui.label(
+                    RichText::new("Duplicate adv data")
+                        .size(theme::text::BODY)
+                        .color(theme::color::TEXT_DIM),
+                );
+                if components::toggle_switch(ui, self.draft.allow_duplicate_data).clicked() {
+                    self.draft.allow_duplicate_data = !self.draft.allow_duplicate_data;
+                }
                 ui.end_row();
 
-                ui.label("Stale timeout");
+                ui.label(
+                    RichText::new("Stale timeout")
+                        .size(theme::text::BODY)
+                        .color(theme::color::TEXT_DIM),
+                );
                 ui.add(
                     egui::DragValue::new(&mut self.draft.stale_after_seconds)
                         .range(1..=600)
@@ -119,7 +151,11 @@ impl SettingsModal {
                 );
                 ui.end_row();
 
-                ui.label("UI refresh / prune cadence");
+                ui.label(
+                    RichText::new("Refresh cadence")
+                        .size(theme::text::BODY)
+                        .color(theme::color::TEXT_DIM),
+                );
                 ui.add(
                     egui::DragValue::new(&mut self.draft.refresh_interval_seconds)
                         .range(1..=120)
@@ -127,18 +163,25 @@ impl SettingsModal {
                 );
                 ui.end_row();
 
-                ui.label("Minimum RSSI");
+                ui.label(
+                    RichText::new("Minimum RSSI")
+                        .size(theme::text::BODY)
+                        .color(theme::color::TEXT_DIM),
+                );
                 ui.add(egui::Slider::new(&mut self.draft.min_rssi, -110..=0).suffix(" dBm"));
                 ui.end_row();
 
-                ui.label("Retention");
+                ui.label(
+                    RichText::new("Retention")
+                        .size(theme::text::BODY)
+                        .color(theme::color::TEXT_DIM),
+                );
                 ui.add(
                     egui::DragValue::new(&mut self.draft.retention_days)
                         .range(1..=365)
                         .suffix(" days"),
                 );
                 ui.end_row();
-
             });
 
         // Detect changes to re-validate only when needed
@@ -147,45 +190,57 @@ impl SettingsModal {
             self.errors = self.draft.validate();
         }
 
-        ui.add_space(12.0);
-        ui.separator();
-        ui.add_space(12.0);
+        ui.add_space(theme::space::LG);
+        components::hairline(ui);
 
-        ui.strong("Paths");
-        ui.label(format!("Settings: {}", Settings::path().display()));
-        ui.label(format!(
-            "Database: {}",
-            self.draft.database_path().display()
-        ));
+        ui.label(
+            RichText::new("Paths")
+                .size(theme::text::SUBHEADING)
+                .color(theme::color::TEXT_PRIMARY)
+                .strong(),
+        );
+        ui.add_space(theme::space::SM);
+        components::kv_row_mono(ui, "Settings", &Settings::path().display().to_string());
+        components::kv_row_mono(
+            ui,
+            "Database",
+            &self.draft.database_path().display().to_string(),
+        );
 
         if !self.errors.is_empty() {
-            ui.add_space(12.0);
+            ui.add_space(theme::space::LG);
             for error in &self.errors.errors {
-                ui.colored_label(egui::Color32::from_rgb(220, 82, 70), error);
+                ui.label(
+                    RichText::new(error)
+                        .size(theme::text::SMALL)
+                        .color(theme::color::ERROR),
+                );
             }
         }
         if let Some(error) = &self.save_error {
-            ui.add_space(8.0);
-            ui.colored_label(
-                egui::Color32::from_rgb(220, 82, 70),
-                format!("Save failed: {error}"),
+            ui.add_space(theme::space::MD);
+            ui.label(
+                RichText::new(format!("Save failed: {error}"))
+                    .size(theme::text::SMALL)
+                    .color(theme::color::ERROR),
             );
         }
 
-        ui.add_space(16.0);
-        ui.separator();
-        ui.add_space(8.0);
+        ui.add_space(theme::space::LG);
+        components::hairline(ui);
 
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Cancel").clicked() {
+                if components::ghost_button(ui, "Cancel", theme::color::TEXT_DIM).clicked() {
                     return SettingsModalResult::Cancelled;
                 }
                 let save_enabled = self.errors.is_empty();
-                if ui
-                    .add_enabled(save_enabled, egui::Button::new("Save"))
-                    .clicked()
-                {
+                let resp = if save_enabled {
+                    components::primary_button(ui, "Save", theme::color::NEAR)
+                } else {
+                    components::ghost_button(ui, "Save", theme::color::TEXT_FAINT)
+                };
+                if save_enabled && resp.clicked() {
                     match self.draft.save() {
                         Ok(()) => return SettingsModalResult::Saved(self.draft.clone()),
                         Err(error) => self.save_error = Some(error),

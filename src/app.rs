@@ -40,7 +40,7 @@ impl BluetoothApp {
             scanner,
             settings,
             selected_tab: ViewTab::Scan,
-            scan_filter: ScanFilter::Live,
+            scan_filter: ScanFilter::All,
             selected_device: None,
             settings_modal: None,
             rename_draft: None,
@@ -61,11 +61,16 @@ impl BluetoothApp {
     }
 
     fn capture_scan(&mut self) {
-        self.captured_devices = self.snapshot.devices.clone();
-        self.captured_at = Some(Utc::now());
+        // If the passive scanner is currently off, treat the click as "start
+        // scanning" instead of "capture empty snapshot". This avoids the
+        // two-click footgun where the first click freezes an empty list and
+        // the user has to click again once results arrive.
         if !self.snapshot.scan_active {
             self.scanner.start_scan();
+            return;
         }
+        self.captured_devices = self.snapshot.devices.clone();
+        self.captured_at = Some(Utc::now());
     }
 }
 
@@ -113,7 +118,10 @@ impl eframe::App for BluetoothApp {
                 AppAction::SetAdapterPowered { adapter, powered } => {
                     self.scanner.set_adapter_powered(adapter, powered);
                 }
-                AppAction::SetAdapterDiscoverable { adapter, discoverable } => {
+                AppAction::SetAdapterDiscoverable {
+                    adapter,
+                    discoverable,
+                } => {
                     self.scanner.set_adapter_discoverable(adapter, discoverable);
                 }
                 AppAction::SetAdapterPairable { adapter, pairable } => {
@@ -139,34 +147,62 @@ impl eframe::App for BluetoothApp {
 }
 
 fn configure_theme(ctx: &egui::Context) {
+    use crate::ui::theme::{color, space, text};
+
     let mut style = (*ctx.style()).clone();
     style.visuals = Visuals::dark();
-    style.visuals.window_fill = egui::Color32::from_rgb(18, 26, 33);
-    style.visuals.panel_fill = egui::Color32::from_rgb(10, 17, 22);
-    style.visuals.extreme_bg_color = egui::Color32::from_rgb(7, 11, 15);
-    style.visuals.faint_bg_color = egui::Color32::from_rgb(24, 36, 44);
-    style.visuals.widgets.noninteractive.bg_fill = egui::Color32::from_rgb(21, 32, 40);
-    style.visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(26, 42, 51);
-    style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(36, 61, 74);
-    style.visuals.widgets.active.bg_fill = egui::Color32::from_rgb(56, 94, 111);
-    style.spacing.item_spacing = egui::vec2(10.0, 8.0);
+
+    // Surfaces
+    style.visuals.window_fill = color::BG_WINDOW;
+    style.visuals.panel_fill = color::BG_PANEL;
+    style.visuals.extreme_bg_color = color::BG_EXTREME;
+    style.visuals.faint_bg_color = color::BG_SURFACE_3;
+
+    // Widget backgrounds
+    style.visuals.widgets.noninteractive.bg_fill = color::BG_SURFACE_3;
+    style.visuals.widgets.inactive.bg_fill = color::BG_SURFACE_2;
+    style.visuals.widgets.hovered.bg_fill = color::BG_SURFACE_3;
+    style.visuals.widgets.active.bg_fill = color::BG_SURFACE_3;
+
+    // Borders
+    style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, color::BORDER);
+    style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, color::BORDER);
+    style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, color::BORDER_MUTED);
+    style.visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, color::ACCENT);
+
+    // Selection highlight
+    style.visuals.selection.bg_fill = color::MID.gamma_multiply(0.18);
+    style.visuals.selection.stroke = egui::Stroke::new(1.0, color::MID);
+
+    // Text on widgets
+    style.visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, color::TEXT_PRIMARY);
+    style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, color::TEXT_SECONDARY);
+    style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, color::TEXT_PRIMARY);
+    style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, color::TEXT_PRIMARY);
+
+    style.spacing.item_spacing = egui::vec2(space::MD, space::MD);
+    style.spacing.button_padding = egui::vec2(space::LG, space::SM);
+
     style.text_styles = [
         (
             TextStyle::Heading,
-            FontId::new(24.0, FontFamily::Proportional),
+            FontId::new(text::HEADING, FontFamily::Proportional),
         ),
-        (TextStyle::Body, FontId::new(15.5, FontFamily::Proportional)),
+        (
+            TextStyle::Body,
+            FontId::new(text::BODY, FontFamily::Proportional),
+        ),
         (
             TextStyle::Button,
-            FontId::new(15.0, FontFamily::Proportional),
+            FontId::new(text::BUTTON, FontFamily::Proportional),
         ),
         (
             TextStyle::Monospace,
-            FontId::new(14.0, FontFamily::Monospace),
+            FontId::new(text::MONO, FontFamily::Monospace),
         ),
         (
             TextStyle::Small,
-            FontId::new(12.0, FontFamily::Proportional),
+            FontId::new(text::SMALL, FontFamily::Proportional),
         ),
     ]
     .into();

@@ -9,10 +9,10 @@ pub fn decode_uuid(uuid: &str) -> Option<&'static str> {
     // Bluetooth SIG standard services: "0000XXXX-0000-1000-8000-00805f9b34fb"
     if lower.len() == 36 && lower[8..] == *"-0000-1000-8000-00805f9b34fb" {
         let hex = &lower[4..8];
-        if let Ok(id) = u16::from_str_radix(hex, 16) {
-            if let Some(name) = lookup_service(id) {
-                return Some(name);
-            }
+        if let Ok(id) = u16::from_str_radix(hex, 16)
+            && let Some(name) = lookup_service(id)
+        {
+            return Some(name);
         }
     }
 
@@ -214,10 +214,7 @@ mod tests {
 
     #[test]
     fn decode_unknown_uuid() {
-        assert_eq!(
-            decode_uuid("deadbeef-dead-beef-dead-beefdeadbeef"),
-            None
-        );
+        assert_eq!(decode_uuid("deadbeef-dead-beef-dead-beefdeadbeef"), None);
     }
 
     #[test]

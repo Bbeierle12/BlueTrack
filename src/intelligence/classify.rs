@@ -75,9 +75,7 @@ pub fn classify(record: &DeviceRecord) -> DeviceCategory {
             "audio-headset" | "headset" => return DeviceCategory::Headset,
             "audio-card" | "audio-speakers" => return DeviceCategory::Speaker,
             "input-keyboard" => return DeviceCategory::InputDevice,
-            "input-mouse" | "input-tablet" | "input-gaming" => {
-                return DeviceCategory::InputDevice
-            }
+            "input-mouse" | "input-tablet" | "input-gaming" => return DeviceCategory::InputDevice,
             "printer" => return DeviceCategory::Printer,
             "camera-video" | "camera-photo" => return DeviceCategory::Unknown, // camera
             _ => {}
@@ -85,24 +83,27 @@ pub fn classify(record: &DeviceRecord) -> DeviceCategory {
     }
 
     // 2. Bluetooth device class bits (classic BT).
-    if let Some(class) = record.class {
-        if let Some(cat) = classify_bt_class(class) {
-            return cat;
-        }
+    if let Some(class) = record.class
+        && let Some(cat) = classify_bt_class(class)
+    {
+        return cat;
     }
 
     // 3. Appearance value (BLE GATT characteristic 0x2A01).
-    if let Some(appearance) = record.appearance {
-        if let Some(cat) = classify_appearance(appearance) {
-            return cat;
-        }
+    if let Some(appearance) = record.appearance
+        && let Some(cat) = classify_appearance(appearance)
+    {
+        return cat;
     }
 
     // 4. Advertised service UUIDs.
     for uuid in &record.uuids {
         let lower = uuid.to_ascii_lowercase();
         // Tracker profiles
-        if lower.starts_with("0000fd43") || lower.starts_with("0000feed") || lower.starts_with("0000fd51") {
+        if lower.starts_with("0000fd43")
+            || lower.starts_with("0000feed")
+            || lower.starts_with("0000fd51")
+        {
             return DeviceCategory::Tracker;
         }
         // HID
@@ -126,7 +127,8 @@ pub fn classify(record: &DeviceRecord) -> DeviceCategory {
             || lower.starts_with("00001816") // Cycling Speed
             || lower.starts_with("00001818") // Cycling Power
             || lower.starts_with("00001826") // Fitness Machine
-            || lower.starts_with("0000183e") // Physical Activity Monitor
+            || lower.starts_with("0000183e")
+        // Physical Activity Monitor
         {
             return DeviceCategory::FitnessTracker;
         }
@@ -135,7 +137,8 @@ pub fn classify(record: &DeviceRecord) -> DeviceCategory {
             || lower.starts_with("00001810") // Blood Pressure
             || lower.starts_with("00001808") // Glucose
             || lower.starts_with("00001822") // Pulse Oximeter
-            || lower.starts_with("0000183a") // Insulin Delivery
+            || lower.starts_with("0000183a")
+        // Insulin Delivery
         {
             return DeviceCategory::HealthSensor;
         }
@@ -157,7 +160,7 @@ pub fn classify(record: &DeviceRecord) -> DeviceCategory {
             0x0118 => return DeviceCategory::Wearable, // Polar Electro
             0x0393 => return DeviceCategory::Wearable, // Suunto
             0x01E3 => return DeviceCategory::Wearable, // Fitbit
-            0x0499 => return DeviceCategory::Beacon,   // Ruuvi beacon
+            0x0499 => return DeviceCategory::Beacon,  // Ruuvi beacon
             _ => {}
         }
     }
@@ -275,14 +278,14 @@ pub fn detect_tracker(record: &DeviceRecord) -> Option<TrackerAlert> {
 fn classify_apple_payload(payload_hex: &str) -> DeviceCategory {
     let bytes = parse_hex_pairs(payload_hex);
     match bytes.first().copied() {
-        Some(0x02) | Some(0x03) => DeviceCategory::Beacon,  // iBeacon
-        Some(0x07) => DeviceCategory::Headphone,             // AirPods
-        Some(0x08) => DeviceCategory::Wearable,              // Apple Watch
-        Some(0x09) => DeviceCategory::Wearable,              // AirPods Pro/Max
+        Some(0x02) | Some(0x03) => DeviceCategory::Beacon, // iBeacon
+        Some(0x07) => DeviceCategory::Headphone,           // AirPods
+        Some(0x08) => DeviceCategory::Wearable,            // Apple Watch
+        Some(0x09) => DeviceCategory::Wearable,            // AirPods Pro/Max
         Some(0x0B) | Some(0x0C) => DeviceCategory::Wearable, // Apple Watch newer
-        Some(0x10) => DeviceCategory::Phone,                 // Nearby Interaction (iPhone/iPad)
-        Some(0x12) => DeviceCategory::Tracker,               // Find My Nearby
-        _ => DeviceCategory::Phone,                          // Generic Apple device
+        Some(0x10) => DeviceCategory::Phone,               // Nearby Interaction (iPhone/iPad)
+        Some(0x12) => DeviceCategory::Tracker,             // Find My Nearby
+        _ => DeviceCategory::Phone,                        // Generic Apple device
     }
 }
 
@@ -324,38 +327,38 @@ fn classify_appearance(appearance: u16) -> Option<DeviceCategory> {
     match category {
         0x01 => Some(DeviceCategory::Phone),
         0x02 => Some(DeviceCategory::Computer),
-        0x03 => Some(DeviceCategory::Wearable),   // Watch
-        0x04 => Some(DeviceCategory::Wearable),   // Clock
-        0x05 => Some(DeviceCategory::Speaker),    // Display
-        0x06 => Some(DeviceCategory::Wearable),   // Remote Control
-        0x07 => Some(DeviceCategory::Speaker),    // Eye-glasses
+        0x03 => Some(DeviceCategory::Wearable),       // Watch
+        0x04 => Some(DeviceCategory::Wearable),       // Clock
+        0x05 => Some(DeviceCategory::Speaker),        // Display
+        0x06 => Some(DeviceCategory::Wearable),       // Remote Control
+        0x07 => Some(DeviceCategory::Speaker),        // Eye-glasses
         0x08 => Some(DeviceCategory::FitnessTracker), // Tag
-        0x09 => Some(DeviceCategory::Wearable),   // Keyring
-        0x0A => Some(DeviceCategory::Phone),      // Media Player
-        0x0B => Some(DeviceCategory::Beacon),     // Barcode Scanner
-        0x0C => Some(DeviceCategory::Wearable),   // Thermometer (wearable)
-        0x0D => Some(DeviceCategory::HealthSensor), // Heart Rate
-        0x0E => Some(DeviceCategory::HealthSensor), // Blood Pressure
-        0x0F => Some(DeviceCategory::HealthSensor), // HID (generic)
+        0x09 => Some(DeviceCategory::Wearable),       // Keyring
+        0x0A => Some(DeviceCategory::Phone),          // Media Player
+        0x0B => Some(DeviceCategory::Beacon),         // Barcode Scanner
+        0x0C => Some(DeviceCategory::Wearable),       // Thermometer (wearable)
+        0x0D => Some(DeviceCategory::HealthSensor),   // Heart Rate
+        0x0E => Some(DeviceCategory::HealthSensor),   // Blood Pressure
+        0x0F => Some(DeviceCategory::HealthSensor),   // HID (generic)
         0x10 => Some(DeviceCategory::FitnessTracker), // Glucose
         0x11 => Some(DeviceCategory::FitnessTracker), // Running/Walking
         0x12 => Some(DeviceCategory::FitnessTracker), // Cycling
         0x13 => Some(DeviceCategory::FitnessTracker), // Control Device
         0x14 => Some(DeviceCategory::NetworkDevice),  // Network Device
-        0x15 => Some(DeviceCategory::Wearable),  // Sensor
-        0x16 => Some(DeviceCategory::InputDevice), // Light Fixtures
+        0x15 => Some(DeviceCategory::Wearable),       // Sensor
+        0x16 => Some(DeviceCategory::InputDevice),    // Light Fixtures
         0x17 => Some(DeviceCategory::FitnessTracker), // Fan
-        0x18 => Some(DeviceCategory::SmartHome),  // HVAC
-        0x19 => Some(DeviceCategory::SmartHome),  // Air Conditioning
-        0x1A => Some(DeviceCategory::SmartHome),  // Humidifier
-        0x1B => Some(DeviceCategory::SmartHome),  // Heating
-        0x1C => Some(DeviceCategory::SmartHome),  // Access Control
-        0x1D => Some(DeviceCategory::SmartHome),  // Motorized Device
-        0x1E => Some(DeviceCategory::SmartHome),  // Power Device
-        0x1F => Some(DeviceCategory::HealthSensor), // Light Source
-        0x20 => Some(DeviceCategory::InputDevice), // Window Covering
-        0x21 => Some(DeviceCategory::SmartHome),  // Audio/Video
-        0x22 => Some(DeviceCategory::Wearable),   // Outdoor Sports
+        0x18 => Some(DeviceCategory::SmartHome),      // HVAC
+        0x19 => Some(DeviceCategory::SmartHome),      // Air Conditioning
+        0x1A => Some(DeviceCategory::SmartHome),      // Humidifier
+        0x1B => Some(DeviceCategory::SmartHome),      // Heating
+        0x1C => Some(DeviceCategory::SmartHome),      // Access Control
+        0x1D => Some(DeviceCategory::SmartHome),      // Motorized Device
+        0x1E => Some(DeviceCategory::SmartHome),      // Power Device
+        0x1F => Some(DeviceCategory::HealthSensor),   // Light Source
+        0x20 => Some(DeviceCategory::InputDevice),    // Window Covering
+        0x21 => Some(DeviceCategory::SmartHome),      // Audio/Video
+        0x22 => Some(DeviceCategory::Wearable),       // Outdoor Sports
         _ => None,
     }
 }

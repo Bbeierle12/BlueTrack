@@ -61,7 +61,11 @@ mod tests {
             "0000180d-0000-1000-8000-00805f9b34fb".to_string(), // Heart Rate
         ];
         enrich(&mut d);
-        assert!(d.decoded_services.iter().any(|s| s.contains("Interface Device")));
+        assert!(
+            d.decoded_services
+                .iter()
+                .any(|s| s.contains("Interface Device"))
+        );
         assert!(d.decoded_services.iter().any(|s| s.contains("Heart Rate")));
     }
 
@@ -74,7 +78,10 @@ mod tests {
             company_name: None,
         }];
         enrich(&mut d);
-        assert_eq!(d.manufacturer_data[0].company_name.as_deref(), Some("Apple"));
+        assert_eq!(
+            d.manufacturer_data[0].company_name.as_deref(),
+            Some("Apple")
+        );
     }
 
     #[test]
@@ -86,10 +93,16 @@ mod tests {
             company_name: None,
         }];
         enrich(&mut d);
-        let alert = d.tracker_alert.as_ref().expect("AirTag should produce tracker alert");
+        let alert = d
+            .tracker_alert
+            .as_ref()
+            .expect("AirTag should produce tracker alert");
         assert_eq!(alert.name, "Apple AirTag");
         assert_eq!(d.category, classify::DeviceCategory::Tracker);
-        assert_eq!(d.manufacturer_data[0].company_name.as_deref(), Some("Apple"));
+        assert_eq!(
+            d.manufacturer_data[0].company_name.as_deref(),
+            Some("Apple")
+        );
     }
 
     #[test]
@@ -97,7 +110,10 @@ mod tests {
         let mut d = device("02:00:00:00:00:01");
         d.uuids = vec!["0000feed-0000-1000-8000-00805f9b34fb".to_string()];
         enrich(&mut d);
-        let alert = d.tracker_alert.as_ref().expect("Tile should produce tracker alert");
+        let alert = d
+            .tracker_alert
+            .as_ref()
+            .expect("Tile should produce tracker alert");
         assert_eq!(alert.name, "Tile Tracker");
         assert_eq!(d.category, classify::DeviceCategory::Tracker);
         assert!(d.decoded_services.iter().any(|s| s.contains("Tile")));
@@ -108,7 +124,10 @@ mod tests {
         let mut d = device("02:00:00:00:00:01");
         d.uuids = vec!["0000fd51-0000-1000-8000-00805f9b34fb".to_string()];
         enrich(&mut d);
-        let alert = d.tracker_alert.as_ref().expect("SmartTag should produce tracker alert");
+        let alert = d
+            .tracker_alert
+            .as_ref()
+            .expect("SmartTag should produce tracker alert");
         assert_eq!(alert.name, "Samsung SmartTag");
         assert_eq!(d.category, classify::DeviceCategory::Tracker);
     }
@@ -121,7 +140,10 @@ mod tests {
             payload_hex: "AABBCC".to_string(),
         }];
         enrich(&mut d);
-        let alert = d.tracker_alert.as_ref().expect("FindMy service data should produce alert");
+        let alert = d
+            .tracker_alert
+            .as_ref()
+            .expect("FindMy service data should produce alert");
         assert_eq!(alert.name, "Apple Find My Device");
     }
 
