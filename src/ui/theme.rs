@@ -193,11 +193,7 @@ pub fn log_level_color(level: &LogLevel) -> Color32 {
 }
 
 pub fn state_color(stale: bool) -> Color32 {
-    if stale {
-        color::STALE
-    } else {
-        color::NEAR
-    }
+    if stale { color::STALE } else { color::NEAR }
 }
 
 pub fn tracker_confidence_color(_c: &TrackerConfidence) -> Color32 {

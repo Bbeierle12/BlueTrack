@@ -33,10 +33,16 @@ fn file_backed_store_lifecycle() {
     let store2 = Store::open(&db_path).unwrap();
     let reloaded = store2.load_devices().unwrap();
     assert_eq!(reloaded.len(), 2);
-    assert!(reloaded.iter().any(|d| d.name.as_deref() == Some("Speaker")));
-    assert!(reloaded
-        .iter()
-        .any(|d| d.name.as_deref() == Some("Headphones")));
+    assert!(
+        reloaded
+            .iter()
+            .any(|d| d.name.as_deref() == Some("Speaker"))
+    );
+    assert!(
+        reloaded
+            .iter()
+            .any(|d| d.name.as_deref() == Some("Headphones"))
+    );
 }
 
 #[test]

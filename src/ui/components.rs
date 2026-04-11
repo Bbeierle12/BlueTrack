@@ -5,8 +5,8 @@
 //! hand-roll `Frame::new().fill(...).stroke(...)` with hex literals.
 
 use eframe::egui::{
-    self, Color32, CornerRadius, Frame, Margin, Pos2, Rect, Response, RichText, Sense, Stroke,
-    Ui, Vec2, WidgetText,
+    self, Color32, CornerRadius, Frame, Margin, Pos2, Rect, Response, RichText, Sense, Stroke, Ui,
+    Vec2, WidgetText,
 };
 
 use super::theme::{alpha, color, radius, space, stroke, text};
@@ -112,12 +112,7 @@ pub fn chip(ui: &mut Ui, label: &str, accent: Color32) {
         .stroke(Stroke::NONE)
         .inner_margin(Margin::symmetric(space::MD_I, 2))
         .show(ui, |ui| {
-            ui.label(
-                RichText::new(label)
-                    .size(text::TINY)
-                    .color(accent)
-                    .strong(),
-            );
+            ui.label(RichText::new(label).size(text::TINY).color(accent).strong());
         });
 }
 
@@ -133,11 +128,7 @@ pub fn status_dot(ui: &mut Ui, accent: Color32) {
 /// right (aligned to the right edge of the parent).
 pub fn kv_row(ui: &mut Ui, key: &str, value: impl Into<WidgetText>) {
     ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(key)
-                .size(text::BODY)
-                .color(color::TEXT_DIM),
-        );
+        ui.label(RichText::new(key).size(text::BODY).color(color::TEXT_DIM));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(value.into());
         });
@@ -147,17 +138,9 @@ pub fn kv_row(ui: &mut Ui, key: &str, value: impl Into<WidgetText>) {
 /// `kv_row` with the value rendered in a specific color (e.g. `● Active` in green).
 pub fn kv_row_colored(ui: &mut Ui, key: &str, value: &str, value_color: Color32) {
     ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(key)
-                .size(text::BODY)
-                .color(color::TEXT_DIM),
-        );
+        ui.label(RichText::new(key).size(text::BODY).color(color::TEXT_DIM));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(
-                RichText::new(value)
-                    .size(text::BODY)
-                    .color(value_color),
-            );
+            ui.label(RichText::new(value).size(text::BODY).color(value_color));
         });
     });
 }
@@ -165,11 +148,7 @@ pub fn kv_row_colored(ui: &mut Ui, key: &str, value: &str, value_color: Color32)
 /// `kv_row` with the value rendered in monospace — used for addresses, UUIDs, hex.
 pub fn kv_row_mono(ui: &mut Ui, key: &str, value: &str) {
     ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(key)
-                .size(text::BODY)
-                .color(color::TEXT_DIM),
-        );
+        ui.label(RichText::new(key).size(text::BODY).color(color::TEXT_DIM));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
                 RichText::new(value)
@@ -221,11 +200,7 @@ pub fn rssi_meter(ui: &mut Ui, rssi: Option<i16>, accent: Color32) {
             });
         }
         None => {
-            ui.label(
-                RichText::new("—")
-                    .size(text::BODY)
-                    .color(color::TEXT_FAINT),
-            );
+            ui.label(RichText::new("—").size(text::BODY).color(color::TEXT_FAINT));
         }
     }
 }
@@ -284,17 +259,9 @@ pub fn toggle_pill(ui: &mut Ui, label: &str, active: bool, accent: Color32) -> R
     let (fill, stroke_width, label_color) = if active {
         (accent, stroke::THIN, color::BG_PANEL)
     } else {
-        (
-            Color32::TRANSPARENT,
-            stroke::THIN,
-            color::TEXT_DIM,
-        )
+        (Color32::TRANSPARENT, stroke::THIN, color::TEXT_DIM)
     };
-    let border = if active {
-        accent
-    } else {
-        color::BORDER
-    };
+    let border = if active { accent } else { color::BORDER };
     let button = egui::Button::new(
         RichText::new(label)
             .size(text::TINY)

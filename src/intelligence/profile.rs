@@ -116,10 +116,10 @@ pub struct BeaconPayload {
 pub fn parse_beacon(record: &DeviceRecord) -> Option<BeaconPayload> {
     // Try iBeacon from manufacturer data (Apple company ID 0x004C, type 0x02 or 0x03)
     for entry in &record.manufacturer_data {
-        if entry.id == 0x004C {
-            if let Some(beacon) = parse_ibeacon(&entry.payload_hex, record.rssi) {
-                return Some(beacon);
-            }
+        if entry.id == 0x004C
+            && let Some(beacon) = parse_ibeacon(&entry.payload_hex, record.rssi)
+        {
+            return Some(beacon);
         }
         // AltBeacon: company-independent, type indicator in first two bytes
         if let Some(beacon) = parse_altbeacon(&entry.payload_hex, entry.id, record.rssi) {
@@ -129,10 +129,10 @@ pub fn parse_beacon(record: &DeviceRecord) -> Option<BeaconPayload> {
     // Try Eddystone from service data (UUID 0xFEAA)
     for entry in &record.service_data {
         let lower = entry.uuid.to_ascii_lowercase();
-        if lower.starts_with("0000feaa") {
-            if let Some(beacon) = parse_eddystone(&entry.payload_hex, record.rssi) {
-                return Some(beacon);
-            }
+        if lower.starts_with("0000feaa")
+            && let Some(beacon) = parse_eddystone(&entry.payload_hex, record.rssi)
+        {
+            return Some(beacon);
         }
     }
     None
@@ -154,11 +154,22 @@ fn parse_ibeacon(payload_hex: &str, rssi: Option<i16>) -> Option<BeaconPayload> 
     let uuid_bytes = &bytes[2..18];
     let uuid = format!(
         "{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
-        uuid_bytes[0], uuid_bytes[1], uuid_bytes[2], uuid_bytes[3],
-        uuid_bytes[4], uuid_bytes[5],
-        uuid_bytes[6], uuid_bytes[7],
-        uuid_bytes[8], uuid_bytes[9],
-        uuid_bytes[10], uuid_bytes[11], uuid_bytes[12], uuid_bytes[13], uuid_bytes[14], uuid_bytes[15]
+        uuid_bytes[0],
+        uuid_bytes[1],
+        uuid_bytes[2],
+        uuid_bytes[3],
+        uuid_bytes[4],
+        uuid_bytes[5],
+        uuid_bytes[6],
+        uuid_bytes[7],
+        uuid_bytes[8],
+        uuid_bytes[9],
+        uuid_bytes[10],
+        uuid_bytes[11],
+        uuid_bytes[12],
+        uuid_bytes[13],
+        uuid_bytes[14],
+        uuid_bytes[15]
     );
     let major = u16::from_be_bytes([bytes[18], bytes[19]]);
     let minor = u16::from_be_bytes([bytes[20], bytes[21]]);
@@ -192,11 +203,22 @@ fn parse_altbeacon(payload_hex: &str, company_id: u16, rssi: Option<i16>) -> Opt
     let uuid_bytes = &bytes[2..18];
     let uuid = format!(
         "{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
-        uuid_bytes[0], uuid_bytes[1], uuid_bytes[2], uuid_bytes[3],
-        uuid_bytes[4], uuid_bytes[5],
-        uuid_bytes[6], uuid_bytes[7],
-        uuid_bytes[8], uuid_bytes[9],
-        uuid_bytes[10], uuid_bytes[11], uuid_bytes[12], uuid_bytes[13], uuid_bytes[14], uuid_bytes[15]
+        uuid_bytes[0],
+        uuid_bytes[1],
+        uuid_bytes[2],
+        uuid_bytes[3],
+        uuid_bytes[4],
+        uuid_bytes[5],
+        uuid_bytes[6],
+        uuid_bytes[7],
+        uuid_bytes[8],
+        uuid_bytes[9],
+        uuid_bytes[10],
+        uuid_bytes[11],
+        uuid_bytes[12],
+        uuid_bytes[13],
+        uuid_bytes[14],
+        uuid_bytes[15]
     );
     let major = u16::from_be_bytes([bytes[18], bytes[19]]);
     let minor = u16::from_be_bytes([bytes[20], bytes[21]]);
@@ -229,11 +251,16 @@ fn parse_eddystone(payload_hex: &str, rssi: Option<i16>) -> Option<BeaconPayload
         0x20 => parse_eddystone_tlm(&bytes),
         0x30 => Some(BeaconPayload {
             format: BeaconFormat::EddystoneEID,
-            uuid: None, major: None, minor: None,
+            uuid: None,
+            major: None,
+            minor: None,
             calibrated_power_dbm: bytes.get(1).copied().map(|b| b as i8),
             estimated_distance_m: None,
-            namespace: None, instance: None, url: None,
-            battery_mv: None, temperature_c: None,
+            namespace: None,
+            instance: None,
+            url: None,
+            battery_mv: None,
+            temperature_c: None,
         }),
         _ => None,
     }
@@ -298,7 +325,7 @@ fn parse_eddystone_url(bytes: &[u8], rssi: Option<i16>) -> Option<BeaconPayload>
             0x0B => ".info",
             0x0C => ".biz",
             0x0D => ".gov",
-            _ if b >= 0x20 && b < 0x7F => {
+            _ if (0x20..0x7F).contains(&b) => {
                 url.push(b as char);
                 continue;
             }
@@ -377,7 +404,11 @@ pub fn decode_apple_device_type(record: &DeviceRecord) -> Option<String> {
                 // Distinguish AirPods Pro vs AirPods Max by payload length.
                 // AirPods Max payload length byte is typically > 0x16.
                 let len = bytes.get(1).copied().unwrap_or(0);
-                if len >= 0x1E { "AirPods Max" } else { "AirPods Pro" }
+                if len >= 0x1E {
+                    "AirPods Max"
+                } else {
+                    "AirPods Pro"
+                }
             }
             0x0A => "Apple Device (Pairing)",
             0x0B | 0x0C => "Apple Watch (Series 6+)",
@@ -388,7 +419,11 @@ pub fn decode_apple_device_type(record: &DeviceRecord) -> Option<String> {
             0x11 => "HomePod",
             0x12 => {
                 let sub = bytes.get(1).copied().unwrap_or(0);
-                if sub == 0x19 { "Apple AirTag" } else { "Apple Find My Accessory" }
+                if sub == 0x19 {
+                    "Apple AirTag"
+                } else {
+                    "Apple Find My Accessory"
+                }
             }
             0x13 => "Apple Magic Switch",
             0x14 => "Apple Handoff",
@@ -480,7 +515,10 @@ mod tests {
         // First octet 0x40 = 0b01000000 → top 2 bits = 01 → resolvable
         let mut d = device("40:00:00:00:00:01");
         d.address_type = Some("random".to_string());
-        assert_eq!(classify_address_type(&d), AddressTypeDetail::RandomResolvable);
+        assert_eq!(
+            classify_address_type(&d),
+            AddressTypeDetail::RandomResolvable
+        );
         assert!(!classify_address_type(&d).is_trackable());
     }
 
@@ -489,7 +527,10 @@ mod tests {
         // First octet 0x1A = 0b00011010 → top 2 bits = 00 → non-resolvable
         let mut d = device("1A:00:00:00:00:01");
         d.address_type = Some("random".to_string());
-        assert_eq!(classify_address_type(&d), AddressTypeDetail::RandomNonResolvable);
+        assert_eq!(
+            classify_address_type(&d),
+            AddressTypeDetail::RandomNonResolvable
+        );
         assert!(!classify_address_type(&d).is_trackable());
     }
 
@@ -597,7 +638,10 @@ mod tests {
             payload_hex: "1219AABBCC".to_string(),
             company_name: Some("Apple".to_string()),
         }];
-        assert_eq!(decode_apple_device_type(&d).as_deref(), Some("Apple AirTag"));
+        assert_eq!(
+            decode_apple_device_type(&d).as_deref(),
+            Some("Apple AirTag")
+        );
     }
 
     #[test]
@@ -608,7 +652,10 @@ mod tests {
             payload_hex: "10AABBCC".to_string(),
             company_name: Some("Apple".to_string()),
         }];
-        assert_eq!(decode_apple_device_type(&d).as_deref(), Some("iPhone / iPad"));
+        assert_eq!(
+            decode_apple_device_type(&d).as_deref(),
+            Some("iPhone / iPad")
+        );
     }
 
     #[test]

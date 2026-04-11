@@ -1,4 +1,4 @@
-use bluetrack::model::{bytes_to_hex, AppSnapshot, DeviceRecord};
+use bluetrack::model::{AppSnapshot, DeviceRecord, bytes_to_hex};
 use chrono::{TimeZone, Utc};
 
 #[test]

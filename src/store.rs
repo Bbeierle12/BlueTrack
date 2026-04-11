@@ -87,7 +87,11 @@ impl Store {
                     json = excluded.json,
                     updated_at = excluded.updated_at
                 ",
-                params![device.address, json, format_sqlite_datetime(device.last_seen)],
+                params![
+                    device.address,
+                    json,
+                    format_sqlite_datetime(device.last_seen)
+                ],
             )
             .map_err(|error| error.to_string())?;
         Ok(())
@@ -260,11 +264,13 @@ mod tests {
         device.alias = Some("My Device".into());
         device.rssi = Some(-65);
         device.paired = true;
-        device.manufacturer_data.push(crate::model::ManufacturerEntry {
-            id: 0x004c,
-            payload_hex: "0215abcd".into(),
-            company_name: None,
-        });
+        device
+            .manufacturer_data
+            .push(crate::model::ManufacturerEntry {
+                id: 0x004c,
+                payload_hex: "0215abcd".into(),
+                company_name: None,
+            });
         device.uuids = vec!["0000180a-0000-1000-8000-00805f9b34fb".into()];
 
         store.upsert_device(&device).unwrap();
