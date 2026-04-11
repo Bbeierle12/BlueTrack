@@ -192,7 +192,13 @@ pub fn render(
                     .inner_margin(egui::Margin::same(theme::space::XL_I)),
             )
             .show(ctx, |ui| {
-                render_device_detail(ui, snapshot, selected_device, rename_draft)
+                render_device_detail(
+                    ui,
+                    snapshot,
+                    captured_devices,
+                    selected_device,
+                    rename_draft,
+                )
             })
             .inner
     {
@@ -1090,22 +1096,18 @@ fn render_profile_card(ui: &mut egui::Ui, device: &DeviceRecord) -> Option<Strin
 fn render_device_detail(
     ui: &mut egui::Ui,
     snapshot: &AppSnapshot,
+    captured_devices: &[DeviceRecord],
     selected_device: &mut Option<String>,
     rename_draft: &mut Option<String>,
 ) -> Option<AppAction> {
     let mut action: Option<AppAction> = None;
 
-    let current = selected_device
-        .as_deref()
-        .and_then(|address| {
-            snapshot
-                .devices
-                .iter()
-                .find(|device| device.address == address)
-        })
-        .or_else(|| snapshot.devices.first());
-
-    let Some(device) = current else {
+    // Resolve the selected device. Look in the live snapshot first (so we show
+    // fresh RSSI / state), then fall back to the captured list (so the user can
+    // still inspect a device they selected from the static Scan grid even after
+    // the backend has purged it). Never silently reassign `*selected_device` —
+    // selection is user-owned.
+    let Some(selected_addr) = selected_device.as_deref().map(str::to_string) else {
         ui.add_space(theme::space::XXL);
         ui.vertical_centered(|ui| {
             ui.label(
@@ -1122,13 +1124,66 @@ fn render_device_detail(
         });
         return action;
     };
-    *selected_device = Some(device.address.clone());
+
+    let live_device = snapshot
+        .devices
+        .iter()
+        .find(|device| device.address == selected_addr);
+    let (device, is_stale_capture) = match live_device {
+        Some(device) => (device, false),
+        None => match captured_devices
+            .iter()
+            .find(|device| device.address == selected_addr)
+        {
+            Some(device) => (device, true),
+            None => {
+                // Vanished from both lists — show an explicit error rather
+                // than silently picking another device.
+                ui.add_space(theme::space::LG);
+                components::alert_banner(ui, theme::color::ERROR, |ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            RichText::new("Selected device is no longer available")
+                                .size(theme::text::BODY)
+                                .color(theme::color::ERROR)
+                                .strong(),
+                        );
+                        ui.label(
+                            RichText::new(&selected_addr)
+                                .monospace()
+                                .size(theme::text::MONO)
+                                .color(theme::color::TEXT_SECONDARY),
+                        );
+                        ui.label(
+                            RichText::new(
+                                "Purged from the live scan and not in the captured list. \
+                                 Select another device from the Scan view.",
+                            )
+                            .size(theme::text::SMALL)
+                            .color(theme::color::TEXT_MUTED),
+                        );
+                    });
+                });
+                return action;
+            }
+        },
+    };
 
     egui::ScrollArea::vertical()
         .id_salt("device_detail_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.style_mut().spacing.item_spacing.y = theme::space::LG;
+
+            if is_stale_capture {
+                components::alert_banner(ui, theme::color::STALE, |ui| {
+                    ui.label(
+                        RichText::new("Showing captured data — device is no longer live")
+                            .size(theme::text::SMALL)
+                            .color(theme::color::STALE),
+                    );
+                });
+            }
 
             // Tracker banner (conditional)
             if let Some(alert) = &device.tracker_alert {
