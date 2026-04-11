@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_DIR="/home/bbeierle12/bluetooth-mapper"
-RELEASE_BIN="$APP_DIR/target/release/bluetooth-mapper"
-DEBUG_BIN="$APP_DIR/target/debug/bluetooth-mapper"
+APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RELEASE_BIN="$APP_DIR/target/release/bluetrack"
+DEBUG_BIN="$APP_DIR/target/debug/bluetrack"
 
 cd "$APP_DIR"
 
