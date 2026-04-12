@@ -590,11 +590,14 @@ impl Worker {
         intelligence::enrich(record);
 
         // ── Distance estimation pipeline ──────────────────────────────
+        // Distance, radar fraction, and TX source are snapshotted on every
+        // advertisement. Confidence is deliberately NOT stored here — it's
+        // recomputed at read time by `DeviceRecord::distance_confidence(now)`
+        // so that the staleness factor decays without a background timer.
         if let Some(rssi_val) = current_rssi {
             use crate::distance::{self, BeaconType};
 
-            let now_instant = std::time::Instant::now();
-            let smoothed = distance::smooth_rssi(&mut record.rssi_filter, rssi_val, now_instant);
+            let smoothed = distance::smooth_rssi(&mut record.rssi_filter, rssi_val, now);
 
             // Resolve beacon type and calibrated power
             let (beacon_type, beacon_cal) = match &record.beacon {
@@ -619,16 +622,9 @@ impl Worker {
 
             let dist = distance::estimate_distance(smoothed, p_tx, self.settings.path_loss_n);
             let fraction = distance::distance_to_radar_fraction(dist);
-            let confidence = distance::compute_confidence(
-                record.rssi_samples,
-                record.rssi_std_dev(),
-                tx_source,
-                0.0, // just received an advertisement
-            );
 
             record.estimated_distance = Some(dist);
             record.radar_fraction = fraction;
-            record.distance_confidence = confidence;
             record.distance_tx_source = Some(tx_source);
         }
 

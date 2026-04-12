@@ -4,12 +4,17 @@
 //! logarithmic radar mapping, proximity band classification, and confidence metric.
 //! See `bluetrack_distance_spec.md` for derivations and references.
 
-use std::time::Instant;
+use chrono::{DateTime, Utc};
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
 /// Free-space path loss at 1 m, 2.44 GHz (dB).
 /// ITU-R P.525: FSPL = 20·log10(4π·1/λ), λ = c/f = 0.12287 m → 40.196 dB.
+///
+/// Note: Google's Eddystone-UID spec recommends an empirical offset of 41 dB
+/// (measure RSSI at 1 m, add 41). We intentionally use the strict physics value;
+/// real-world Eddystone beacons calibrated per Google's recommendation will be
+/// ~0.8 dB low, which propagates to ~9% under-estimation in reported distance.
 pub const FSPL_1M: f32 = 40.2;
 
 /// Default assumed RSSI at 1 m when no TX power is available (dBm).
@@ -27,17 +32,28 @@ const RSSI_FLOOR: f32 = -100.0;
 /// Minimum reportable distance (m).
 const DIST_MIN: f32 = 0.1;
 
-/// Maximum reportable distance (m).
+/// Maximum reportable distance (m). Intentionally larger than `RADAR_D_MAX`:
+/// the numerical distance text can carry estimates out to 100 m even when the
+/// radar visualization pins the dot to the outermost ring at 30 m.
 const DIST_MAX: f32 = 100.0;
 
 /// Radar inner edge (m).
 const RADAR_D_MIN: f32 = 0.1;
 
-/// Radar outer edge (m).
+/// Radar outer edge (m). Dots at distances beyond this clamp to the outer ring.
 const RADAR_D_MAX: f32 = 30.0;
 
 /// log10(RADAR_D_MAX / RADAR_D_MIN) = log10(300).
 const RADAR_LOG_RANGE: f32 = 2.4771;
+
+/// Radar fraction for a device with an unknown current RSSI that has not
+/// yet gone stale. Sits just inside the outer ring so unplaceable dots are
+/// visually segregated from real far-band devices.
+pub const NO_RSSI_FRACTION: f32 = 0.80;
+
+/// Radar fraction for a device explicitly marked stale.
+/// Pushed further out to visually separate stale dots from the unknown-RSSI band.
+pub const STALE_RADAR_FRACTION: f32 = 0.92;
 
 /// Near/Mid boundary in meters.
 pub const NEAR_THRESHOLD_M: f32 = 1.0;
@@ -48,11 +64,15 @@ pub const MID_THRESHOLD_M: f32 = 4.0;
 /// Number of RSSI samples for full sample confidence.
 const CONFIDENCE_SAMPLE_TARGET: f32 = 10.0;
 
-/// Standard deviation at which variance confidence drops to 0.1.
+/// Standard deviation at which variance confidence reaches zero.
 const CONFIDENCE_SIGMA_MAX: f32 = 15.0;
 
 /// Seconds until staleness confidence reaches zero.
 const CONFIDENCE_STALE_TIMEOUT: f32 = 60.0;
+
+/// Confidence assigned to the variance factor when sample count is below 2
+/// (i.e. `rssi_std_dev()` returns None). Neutral, not optimistic.
+const CONFIDENCE_VARIANCE_UNKNOWN: f32 = 0.5;
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -77,13 +97,16 @@ pub struct DistanceEstimate {
 }
 
 /// Per-device RSSI smoothing state: cascaded median-of-3 → time-weighted EMA.
+///
+/// Timestamps use `chrono::DateTime<Utc>` so that dt is measured from the BlueZ
+/// event time carried by `note_advertisement`, not from worker wall-clock latency.
 #[derive(Debug, Clone)]
 pub struct RssiFilter {
     median_buf: [f32; 3],
     median_idx: u8,
     median_count: u8,
     ema_rssi: Option<f32>,
-    last_adv_time: Option<Instant>,
+    last_adv_time: Option<DateTime<Utc>>,
 }
 
 impl Default for RssiFilter {
@@ -167,7 +190,9 @@ fn median3(a: f32, b: f32, c: f32) -> f32 {
 
 /// Feed a new raw RSSI sample into the cascaded median→EMA filter.
 /// Returns the smoothed RSSI value in dBm.
-pub fn smooth_rssi(filter: &mut RssiFilter, new_rssi: i16, now: Instant) -> f32 {
+///
+/// `now` should be the BlueZ event timestamp, not wall-clock at processing time.
+pub fn smooth_rssi(filter: &mut RssiFilter, new_rssi: i16, now: DateTime<Utc>) -> f32 {
     let raw = (new_rssi as f32).clamp(RSSI_FLOOR, 0.0);
 
     // Median prefilter
@@ -191,7 +216,7 @@ pub fn smooth_rssi(filter: &mut RssiFilter, new_rssi: i16, now: Instant) -> f32 
         Some(prev) => {
             let dt = filter
                 .last_adv_time
-                .map(|t| now.duration_since(t).as_secs_f32())
+                .map(|t| (now.signed_duration_since(t).num_milliseconds() as f32) / 1000.0)
                 .unwrap_or(1.0)
                 .clamp(0.01, 30.0);
 
@@ -240,6 +265,14 @@ pub fn proximity_band_from_distance(distance_m: f32) -> &'static str {
 // ── Confidence ───────────────────────────────────────────────────────────
 
 /// Compute a [0, 1] confidence score for a distance estimate.
+///
+/// - `rssi_samples` drives a linear ramp to full credit at `CONFIDENCE_SAMPLE_TARGET`.
+/// - `rssi_std_dev = None` (fewer than 2 samples) is treated as neutral (0.5),
+///   not optimistic (1.0): unknown variance is not zero variance.
+/// - `rssi_std_dev = Some(σ)` decays linearly to 0 at `CONFIDENCE_SIGMA_MAX`.
+///   No floor — catastrophic variance collapses the whole product, and
+///   `format_distance`'s 0.3 gate then suppresses the display.
+/// - `secs_since_last_adv` drives a linear decay to 0 at `CONFIDENCE_STALE_TIMEOUT`.
 pub fn compute_confidence(
     rssi_samples: u64,
     rssi_std_dev: Option<f32>,
@@ -248,8 +281,10 @@ pub fn compute_confidence(
 ) -> f32 {
     let c_samples = (rssi_samples as f32 / CONFIDENCE_SAMPLE_TARGET).min(1.0);
 
-    let sigma = rssi_std_dev.unwrap_or(0.0);
-    let c_variance = (1.0 - sigma / CONFIDENCE_SIGMA_MAX).max(0.1);
+    let c_variance = match rssi_std_dev {
+        Some(sigma) => (1.0 - sigma / CONFIDENCE_SIGMA_MAX).max(0.0),
+        None => CONFIDENCE_VARIANCE_UNKNOWN,
+    };
 
     let c_tx = match tx_source {
         TxSource::BeaconCal => 1.0,
@@ -364,7 +399,7 @@ mod tests {
     #[test]
     fn smooth_first_sample_passthrough() {
         let mut filter = RssiFilter::default();
-        let now = Instant::now();
+        let now = Utc::now();
         let result = smooth_rssi(&mut filter, -60, now);
         assert_eq!(result, -60.0);
         assert_eq!(filter.smoothed_rssi(), Some(-60.0));
@@ -373,7 +408,7 @@ mod tests {
     #[test]
     fn smooth_clamps_to_floor() {
         let mut filter = RssiFilter::default();
-        let now = Instant::now();
+        let now = Utc::now();
         let result = smooth_rssi(&mut filter, -120, now);
         assert_eq!(result, RSSI_FLOOR);
     }
@@ -381,9 +416,36 @@ mod tests {
     #[test]
     fn smooth_clamps_positive_rssi() {
         let mut filter = RssiFilter::default();
-        let now = Instant::now();
+        let now = Utc::now();
         let result = smooth_rssi(&mut filter, 5, now);
         assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn median_prefilter_rejects_single_outlier() {
+        // Feed five clean -60 dBm samples, then one 18 dB outlier, then check
+        // that the next smoothed reading is still essentially at -60. The
+        // median-of-3 stage should drop the outlier before it reaches the EMA.
+        let mut filter = RssiFilter::default();
+        let t0 = Utc::now();
+
+        for i in 0..5 {
+            let t = t0 + chrono::Duration::milliseconds(i * 200);
+            smooth_rssi(&mut filter, -60, t);
+        }
+        let clean = filter.smoothed_rssi().unwrap();
+        assert!((clean - (-60.0)).abs() < 0.5, "baseline drift: got {clean}");
+
+        // Single outlier at -42 (18 dB louder than baseline)
+        let t_outlier = t0 + chrono::Duration::milliseconds(1000);
+        let after = smooth_rssi(&mut filter, -42, t_outlier);
+
+        // Median window is now [-60, -60, -42]; median = -60, so EMA input = -60
+        // and the filter should move negligibly from the prior value.
+        assert!(
+            (after - (-60.0)).abs() < 1.0,
+            "outlier leaked through prefilter: got {after}"
+        );
     }
 
     // ── Distance Estimation ─────────────────────────────────────────
@@ -677,6 +739,20 @@ mod tests {
         let f_far = distance_to_radar_fraction(20.0);
         assert!(f_close < f_mid);
         assert!(f_mid < f_far);
+    }
+
+    #[test]
+    fn invariant_composed_rssi_to_fraction() {
+        // INV-4: Higher RSSI (stronger signal) ⇒ smaller radar fraction.
+        // Explicit composition of INV-1 (distance) and INV-2 (radar) to lock
+        // the end-to-end monotonicity the user actually sees.
+        let p_tx = DEFAULT_TX_REF;
+        let n = DEFAULT_N;
+        let f_strong = distance_to_radar_fraction(estimate_distance(-40.0, p_tx, n));
+        let f_medium = distance_to_radar_fraction(estimate_distance(-60.0, p_tx, n));
+        let f_weak = distance_to_radar_fraction(estimate_distance(-80.0, p_tx, n));
+        assert!(f_strong < f_medium, "f_strong={f_strong} f_medium={f_medium}");
+        assert!(f_medium < f_weak, "f_medium={f_medium} f_weak={f_weak}");
     }
 
     #[test]

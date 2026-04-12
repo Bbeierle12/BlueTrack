@@ -457,7 +457,7 @@ fn render_scan_view(
                         // Distance column
                         let dist_text = crate::distance::format_distance(
                             device.estimated_distance,
-                            device.distance_confidence,
+                            device.distance_confidence(chrono::Utc::now()),
                         );
                         let dist_color = if device.estimated_distance.is_some() {
                             theme::color::TEXT_SECONDARY
@@ -673,7 +673,7 @@ fn render_radar_canvas(
             let alpha = if is_stale {
                 0.45
             } else {
-                crate::distance::dot_alpha(device.distance_confidence).max(0.15)
+                crate::distance::dot_alpha(device.distance_confidence(chrono::Utc::now())).max(0.15)
             };
 
             // Filled dot
@@ -834,8 +834,8 @@ const RING_FAR: f32 = 1.00;
 pub(crate) fn rssi_to_fraction(device: &DeviceRecord) -> f32 {
     match device.estimated_distance {
         Some(_) => device.radar_fraction,
-        None if device.stale => 0.92,
-        None => 0.80,
+        None if device.stale => crate::distance::STALE_RADAR_FRACTION,
+        None => crate::distance::NO_RSSI_FRACTION,
     }
 }
 
@@ -1482,7 +1482,7 @@ fn render_detail_section_signal(ui: &mut egui::Ui, device: &DeviceRecord) {
             "Distance",
             crate::distance::format_distance(
                 device.estimated_distance,
-                device.distance_confidence,
+                device.distance_confidence(chrono::Utc::now()),
             ),
         );
         components::kv_row_colored(

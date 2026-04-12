@@ -114,10 +114,10 @@ pub struct DeviceRecord {
     /// Radar fraction [0, 1] for dot placement.
     #[serde(skip)]
     pub radar_fraction: f32,
-    /// Confidence in the distance estimate [0, 1].
-    #[serde(skip)]
-    pub distance_confidence: f32,
     /// Source of TX power used for the last distance estimate.
+    /// Confidence is not stored — it's recomputed at read time from
+    /// `(rssi_samples, rssi_std_dev, distance_tx_source, now - last_seen)`
+    /// so the staleness factor actually decays over time.
     #[serde(skip)]
     pub distance_tx_source: Option<TxSource>,
 }
@@ -175,7 +175,6 @@ impl Default for DeviceRecord {
             rssi_filter: RssiFilter::default(),
             estimated_distance: None,
             radar_fraction: 1.0,
-            distance_confidence: 0.0,
             distance_tx_source: None,
         }
     }
@@ -250,7 +249,6 @@ impl DeviceRecord {
             rssi_filter: RssiFilter::default(),
             estimated_distance: None,
             radar_fraction: 1.0,
-            distance_confidence: 0.0,
             distance_tx_source: None,
         }
     }
@@ -322,6 +320,26 @@ impl DeviceRecord {
             None if self.stale => "Stale",
             None => "Unknown",
         }
+    }
+
+    /// Confidence in the current distance estimate [0, 1], computed from the
+    /// device's sample count, RSSI variance, TX-power provenance, and the
+    /// elapsed time since the last advertisement.
+    ///
+    /// Recomputed on every read so that the staleness factor actually decays
+    /// without needing a dedicated timer thread.
+    pub fn distance_confidence(&self, now: DateTime<Utc>) -> f32 {
+        if self.estimated_distance.is_none() {
+            return 0.0;
+        }
+        let dt_ms = now.signed_duration_since(self.last_seen).num_milliseconds();
+        let secs_stale = ((dt_ms as f32) / 1000.0).max(0.0);
+        crate::distance::compute_confidence(
+            self.rssi_samples,
+            self.rssi_std_dev(),
+            self.distance_tx_source.unwrap_or(TxSource::Default),
+            secs_stale,
+        )
     }
 
     pub fn stability_score(&self) -> u8 {
@@ -824,6 +842,83 @@ mod tests {
         let d = make_device();
         // u8 is always >= 0, but verify the score is reasonable
         assert!(d.stability_score() <= 100);
+    }
+
+    // ── distance_confidence end-to-end (staleness decay) ────────────
+    //
+    // Regression for the bug where `bluetooth.rs` hardcoded the staleness
+    // argument to 0.0, making `CONFIDENCE_STALE_TIMEOUT` dead code in
+    // production. This test exercises the getter, not the backend, so it
+    // verifies that reading `distance_confidence(now)` actually decays.
+
+    #[test]
+    fn distance_confidence_zero_without_estimate() {
+        let d = make_device();
+        // No estimated_distance set → confidence pinned to 0 regardless of time.
+        assert_eq!(d.distance_confidence(Utc::now()), 0.0);
+    }
+
+    #[test]
+    fn distance_confidence_full_at_fresh_sighting() {
+        let t0 = Utc::now();
+        let mut d = DeviceRecord::new("AA:BB:CC:DD:EE:FF", "hci0", t0);
+        d.last_seen = t0;
+        d.estimated_distance = Some(1.0);
+        d.distance_tx_source = Some(crate::distance::TxSource::BeaconCal);
+        // 10 identical samples → samples=full, σ=0
+        for _ in 0..10 {
+            d.rssi_sum += -59;
+            d.rssi_sum_squares += 59.0 * 59.0;
+            d.rssi_samples += 1;
+        }
+        let c = d.distance_confidence(t0);
+        // samples=1.0, variance=1.0 (σ=0), tx=1.0 (BeaconCal), stale=1.0 (dt=0)
+        assert!((c - 1.0).abs() < 0.001, "got {c}");
+    }
+
+    #[test]
+    fn distance_confidence_decays_at_30_seconds() {
+        let t0 = Utc::now();
+        let mut d = DeviceRecord::new("AA:BB:CC:DD:EE:FF", "hci0", t0);
+        d.last_seen = t0;
+        d.estimated_distance = Some(1.0);
+        d.distance_tx_source = Some(crate::distance::TxSource::BeaconCal);
+        for _ in 0..10 {
+            d.rssi_sum += -59;
+            d.rssi_sum_squares += 59.0 * 59.0;
+            d.rssi_samples += 1;
+        }
+        // Fresh
+        let c_fresh = d.distance_confidence(t0);
+        // Half-stale (30 s / 60 s = 0.5 decay)
+        let c_30s = d.distance_confidence(t0 + chrono::Duration::seconds(30));
+        // Fully stale
+        let c_60s = d.distance_confidence(t0 + chrono::Duration::seconds(60));
+
+        assert!(c_fresh > 0.9, "fresh: {c_fresh}");
+        assert!(
+            (c_30s - c_fresh * 0.5).abs() < 0.01,
+            "30s decay: fresh={c_fresh} 30s={c_30s}"
+        );
+        assert_eq!(c_60s, 0.0, "60s should be fully stale");
+    }
+
+    #[test]
+    fn distance_confidence_clamps_negative_dt_to_zero() {
+        // If someone passes a `now` earlier than last_seen (clock skew),
+        // the staleness factor should clamp to the fresh end, not go above 1.
+        let t0 = Utc::now();
+        let mut d = DeviceRecord::new("AA:BB:CC:DD:EE:FF", "hci0", t0);
+        d.last_seen = t0;
+        d.estimated_distance = Some(1.0);
+        d.distance_tx_source = Some(crate::distance::TxSource::BeaconCal);
+        for _ in 0..10 {
+            d.rssi_sum += -59;
+            d.rssi_sum_squares += 59.0 * 59.0;
+            d.rssi_samples += 1;
+        }
+        let c = d.distance_confidence(t0 - chrono::Duration::seconds(5));
+        assert!(c <= 1.0 && c > 0.9, "negative dt should clamp: {c}");
     }
 
     // ── recurrence_label ────────────────────────────────────────────
