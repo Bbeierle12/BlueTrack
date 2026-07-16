@@ -1,0 +1,8 @@
+{
+  "name": "bluetrack-snapshot-opt",
+  "displayName": "BlueTrack Snapshot Latency Optimization",
+  "description": "Optimize the latency of snapshot cloning in the worker thread.",
+  "targetFile": "src/model.rs",
+  "evalCommand": "./eval_benchmark.sh",
+  "logFile": "results.tsv"
+}
